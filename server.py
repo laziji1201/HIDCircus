@@ -23,7 +23,7 @@ import hid
 from providers import build_providers
 
 HOST = "127.0.0.1"
-PORT = 8777
+PORT = int(os.environ.get("HIDCIRCUS_PORT", "8777"))   # 端口冲突时可用环境变量覆盖
 PORT_TRIES = 8          # 端口被占用时依次往后试
 CACHE_TTL = 2.0         # 秒，这个时间内重复请求复用上一次扫描结果
 MAX_BACKGROUND = 12 * 1024 * 1024   # 背景图上限 12MB

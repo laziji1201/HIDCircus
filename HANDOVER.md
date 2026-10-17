@@ -267,7 +267,15 @@ buf[89]     校验
     `/api/ping` 不校验（心跳要简单）。手动调试接口时要先取 token
 36. **设备插拔走 WM_DEVICECHANGE**：隐藏窗口注册 HID 设备接口通知，插拔后 0.8 秒强制重扫，
     不再干等 10 秒轮询
-37. **系统代理会把 127.0.0.1 也劫持掉**（这台机器就有），表现是 Edge `--app` 窗口标题变成
+37. **打包实测（2026-10-17）**：`pyinstaller --onefile --windowed --add-data "web;web"
+    --add-data "assets;assets" --icon assets\icon.ico app.py` 产出 13.2 MB 的 exe，
+    实测能正常起服务、返回页面、读设备（`dist\logs\app.log` 有完整日志）。
+    **打包不会引入新的权限问题**：托盘失败只因启动它的进程被降权，正常双击是「中」权限。
+    注意两点：① onefile 需要可写的 `%TEMP%`，沙箱环境下会报
+    `Could not create temporary directory!`；② 打包后 `tools/setup.ps1` 不在包内，
+    开机自启要额外把它一起分发（或用 exe 内嵌路径处理）
+38. **端口可被环境变量覆盖**：`HIDCIRCUS_PORT=8790` 可用于多实例测试或端口冲突
+39. **系统代理会把 127.0.0.1 也劫持掉**（这台机器就有），表现是 Edge `--app` 窗口标题变成
     `127.0.0.1`、页面永远白屏——看起来像渲染进程崩溃，其实是代理把本地回环请求转走了。
     现在所有浏览器启动都带 `--no-proxy-server`，问题消失。排查这类"窗口开了但白屏"，
     先看服务端有没有收到请求（`HIDCIRCUS_DEBUG=1` 时写 `logs/requests.log`）
