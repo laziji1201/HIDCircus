@@ -106,6 +106,16 @@ run.bat / debug.bat / panel.bat / build.ps1
 - 不使用厂商商标/logo；README 有非官方免责声明
 - 不涉及 DRM 绕过、固件刷写
 
+## 扩展：自己适配冷门外设
+
+没有原版设备就没法盲写适配，所以读取部分做成了**声明式 JSON 扩展**：
+有设备的用户（或他的 AI agent）照着协议填一份 JSON 放进 `extensions/` 就生效。
+
+- 格式说明与调试方法：[extensions/README.md](extensions/README.md)
+- 参考实现：[extensions/examples/](extensions/examples/)
+- 适配好了可以在「设置 → 扩展」里**一键导出**，回传给项目做更广的适配
+- 没适配的设备也能点「导出设备探测报告」，把接口信息发回来
+
 ## 关于"支持更多设备"
 
 **同品牌的其它型号**：能读到多少算多少。已知型号表只提供名字，其它型号会用同一套命令

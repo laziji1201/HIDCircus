@@ -39,8 +39,11 @@ WEB_DIR = BASE_DIR / "web"
 ASSET_DIR = BASE_DIR / "assets"
 CONFIG_PATH = DATA_DIR / "config.json"
 BACKGROUND_DIR = DATA_DIR / "assets" / "background"
+# 扩展目录：用户自己写的适配文件放这里（打包后跟 exe 同级的 extensions/）
+EXTENSION_DIRS = list(dict.fromkeys([DATA_DIR / "extensions",
+                                    BASE_DIR / "extensions"]))
 
-PROVIDERS = build_providers(hid)
+PROVIDERS = build_providers(hid, EXTENSION_DIRS)
 
 DEFAULT_SETTINGS = {
     "theme": "auto",        # auto | dark | light
@@ -126,7 +129,36 @@ def _scan_all():
             out.append({"id": f"{p.VENDOR}:error", "name": p.LABEL,
                         "vendor": p.LABEL, "vendor_key": p.VENDOR,
                         "connected": False, "note": f"扫描异常: {e}"})
-    return out
+    return _drop_duplicate_extensions(out)
+
+
+def _drop_duplicate_extensions(devices):
+    """内置 provider 已经认出的设备，不再被扩展重复报一份。
+
+    内置型号 id 形如 `razer:00c1`（末尾是 product id），扩展设备的 extra 里带着
+    自己的 pid。两者撞上就丢掉扩展那份，避免面板出现两台一模一样的设备。
+    """
+    from providers import EXTENSIONS
+    builtin_pids = set()
+    for d in devices:
+        if (d.get("extra") or {}).get("extension"):
+            continue
+        tail = (d.get("id") or "").rsplit(":", 1)[-1]
+        if len(tail) == 4:
+            builtin_pids.add(tail.lower())
+
+    kept = []
+    for d in devices:
+        info = (d.get("extra") or {}).get("extension")
+        if not info:
+            kept.append(d)
+            continue
+        ext = next((e for e in EXTENSIONS if e.id == info.get("id")), None)
+        pids = {f"{p:04x}" for p in (ext.pids if ext else [])}
+        if pids & builtin_pids:
+            continue                     # 内置已经能读，扩展跳过
+        kept.append(d)
+    return kept
 
 
 def collect_devices(force=False):
@@ -218,11 +250,14 @@ class Handler(BaseHTTPRequestHandler):
 
     # ----- 工具 -----
 
-    def _send(self, body: bytes, content_type="application/json", status=200):
+    def _send(self, body: bytes, content_type="application/json", status=200,
+              extra_headers=None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for key, value in (extra_headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -291,6 +326,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/api/autostart":
             self._json({"enabled": autostart_enabled()})
+            return
+        if route.startswith("/api/extensions/export"):
+            self._export_extension(route)
+            return
+        if route == "/api/hid-report":
+            self._hid_report()
+            return
+        if route == "/api/extensions":
+            from providers import EXTENSIONS, EXTENSION_ERRORS
+            self._json({
+                "dirs": [str(d) for d in EXTENSION_DIRS],
+                "loaded": [e.to_dict() for e in EXTENSIONS],
+                "errors": EXTENSION_ERRORS,
+            })
             return
         if route.startswith("/assets/background/"):
             name = Path(unquote(route.rsplit("/", 1)[-1])).name
@@ -398,6 +447,87 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True, "settings": load_settings()})
             return
         self._json({"error": "not found"}, 404)
+
+    def _export_extension(self, route):
+        """把某个扩展的原始 JSON 原样吐出来，前端直接下载。"""
+        from urllib.parse import parse_qs
+        from providers import EXTENSIONS
+        query = parse_qs(urlparse(self.path).query)
+        ext_id = (query.get("id") or [""])[0]
+        ext = next((e for e in EXTENSIONS if e.id == ext_id), None)
+        if ext is None:
+            self._json({"error": "没有这个扩展"}, 404)
+            return
+        try:
+            raw = ext.path.read_bytes()
+        except OSError as e:
+            self._json({"error": f"读不到文件: {e}"}, 500)
+            return
+        self._send(raw, "application/json; charset=utf-8", extra_headers={
+            "Content-Disposition": f'attachment; filename="{ext.path.name}"'})
+
+    def _hid_report(self):
+        """枚举所有 HID 接口，产出给维护者看的探测报告。
+
+        面对一台没适配的设备，用户点一下就能拿到这份 JSON 发给维护者：
+        里面是接口列表（vid/pid/usage/产品名）+ 扩展模板骨架 + 环境信息。
+        不包含任何读数尝试，避免向未知设备乱发报文。
+        """
+        from providers import EXTENSIONS
+        entries = []
+        try:
+            for d in hid.enumerate():
+                entries.append({
+                    "vendor_id": f"0x{d.get('vendor_id', 0):04X}",
+                    "product_id": f"0x{d.get('product_id', 0):04X}",
+                    "usage_page": f"0x{d.get('usage_page', 0):04X}",
+                    "usage": f"0x{d.get('usage', 0):04X}",
+                    "interface_number": d.get("interface_number"),
+                    "product_string": d.get("product_string") or "",
+                    "manufacturer_string": d.get("manufacturer_string") or "",
+                    "release_number": d.get("release_number"),
+                })
+        except Exception as e:
+            self._json({"error": f"枚举失败: {e}"}, 500)
+            return
+
+        # 已经适配过的 vid/pid 标出来，方便维护者跳过
+        covered = [f"0x{e.vid:04X}:" + "/".join(f"0x{p:04X}" for p in e.pids)
+                   for e in EXTENSIONS]
+        from providers import build_providers as _bp  # noqa: F401  (说明用，不调用)
+
+        report = {
+            "_what": "HIDCircus 设备探测报告，可发给维护者用于适配",
+            "_version": 1,
+            "generated_by": "HIDCircus /api/hid-report",
+            "env": {"platform": sys.platform, "python": sys.version.split()[0]},
+            "loaded_extensions": covered,
+            "interfaces": entries,
+            "draft": {
+                "spec": 1,
+                "id": "vendor-model",
+                "name": "厂商 型号（电量）",
+                "author": "你的名字",
+                "match": {
+                    "vid": "<从上面挑 usage_page=0xFF00 的那一行>",
+                    "pid": ["<同一行的 product_id>"],
+                    "usage_page": "0xFF00",
+                },
+                "device": {"name": "型号", "kind": "mouse",
+                           "vendor_label": "厂商"},
+                "read": {
+                    "battery": {
+                        "transport": "feature",
+                        "report_id": "0x00",
+                        "request": "",
+                        "value": {"offset": 0, "size": 1},
+                    }
+                },
+            },
+        }
+        body = json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8")
+        self._send(body, "application/json; charset=utf-8", extra_headers={
+            "Content-Disposition": 'attachment; filename="hidcircus-hid-report.json"'})
 
     def _save_background(self, raw: bytes):
         """接收原始图片字节，存成固定文件名（只保留一张，省得堆垃圾）。"""

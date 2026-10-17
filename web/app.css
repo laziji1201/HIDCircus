@@ -1182,3 +1182,33 @@ html[data-palette="neon"][data-theme="light"] {
 
 /* 侧栏品牌图 */
 img.mark { object-fit: contain; background: transparent; box-shadow: none; }
+
+/* 扩展列表 */
+.ext-list { display: flex; flex-direction: column; gap: 6px; }
+.ext-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  font-size: 12px;
+}
+.ext-row .vdot { width: 6px; height: 6px; }
+.ext-name { font-weight: 550; }
+.ext-meta { color: var(--text-3); font-size: 11px; margin-left: auto; }
+.ext-row.is-error { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+.ext-row.is-error .ext-name { color: var(--bad); }
+.ext-empty { color: var(--text-3); font-size: 12px; }
+
+.ext-export {
+  font-size: 11px;
+  color: var(--text-2);
+  text-decoration: none;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--line-2);
+  transition: background var(--dur) var(--ease);
+}
+.ext-export:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }

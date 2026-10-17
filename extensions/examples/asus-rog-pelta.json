@@ -1,0 +1,48 @@
+{
+  "spec": 1,
+  "id": "asus-rog-pelta",
+  "name": "ROG PELTA 电量（参考实现）",
+  "author": "HIDCircus",
+  "match": {
+    "vid": "0x0B05",
+    "pid": ["0x1B84"],
+    "usage_page": "0xFF00"
+  },
+  "device": {
+    "name": "ROG PELTA",
+    "kind": "headset",
+    "vendor_label": "ASUS/ROG"
+  },
+  "read": {
+    "battery": {
+      "transport": "feature",
+      "report_id": "0xCC",
+      "request": "0x12 0x07",
+      "read_size": 64,
+      "reply_check": { "offset": 1, "equals": "0x12" },
+      "value": { "offset": 6, "size": 1, "min": 0, "max": 100 }
+    },
+    "charging": {
+      "transport": "feature",
+      "report_id": "0xCC",
+      "request": "0x12 0x08",
+      "read_size": 64,
+      "reply_check": { "offset": 1, "equals": "0x12" },
+      "value": { "offset": 5, "equals": "1" }
+    }
+  },
+  "write": {
+    "lighting_on": {
+      "label": "开灯效",
+      "transport": "feature",
+      "report_id": "0xCC",
+      "request": "0x51 0x10 0x01"
+    },
+    "lighting_off": {
+      "label": "关灯效",
+      "transport": "feature",
+      "report_id": "0xCC",
+      "request": "0x51 0x10 0x00"
+    }
+  }
+}

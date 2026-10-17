@@ -1,0 +1,31 @@
+{
+  "spec": 1,
+  "id": "razer-viper-v3-pro",
+  "name": "Viper V3 Pro 电量（参考实现）",
+  "author": "HIDCircus",
+  "match": {
+    "vid": "0x1532",
+    "pid": ["0x00C1"],
+    "usage_page": "0x0001",
+    "usage": "0x0002"
+  },
+  "device": {
+    "name": "Viper V3 Pro",
+    "kind": "mouse",
+    "vendor_label": "Razer"
+  },
+  "read": {
+    "battery": {
+      "transport": "razer",
+      "command": "0x07 0x80 0x00 0x00 0x02",
+      "reply_check": { "offset": 0, "equals": "0x02" },
+      "value": { "offset": 10, "size": 1, "scale": 0.392, "min": 0, "max": 100 }
+    },
+    "charging": {
+      "transport": "razer",
+      "command": "0x07 0x80 0x00 0x00 0x02",
+      "reply_check": { "offset": 0, "equals": "0x02" },
+      "value": { "offset": 10, "equals": "1" }
+    }
+  }
+}

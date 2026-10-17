@@ -470,7 +470,8 @@
     mark("#langSeg", s.language || "zh");
     mark("#refreshSeg", String(s.refresh_seconds ?? 10));
     mark("#motionSeg", s.motion || "auto");
-    renderPalettes(s.palette || "amber");
+    renderPalettes(s.palette || "silver");
+    renderExtensions();
 
     const dim = Math.round((s.bg_dim ?? 0.55) * 100);
     const blur = Math.round(s.bg_blur ?? 0);
@@ -496,6 +497,50 @@
       const logEl = $("#aboutLog");
       if (logEl && st && st.log) logEl.textContent = st.log.replace(/^.*[\\/]/, "logs/");
     }).catch(() => {});
+  }
+
+  async function renderExtensions() {
+    const box = $("#extList");
+    if (!box) return;
+    const data = await api("/api/extensions").catch(() => null);
+    if (!data) { box.innerHTML = ""; return; }
+    const rows = [];
+    (data.loaded || []).forEach((e) => {
+      rows.push(`
+        <div class="ext-row">
+          <i class="vdot" style="background:var(--ok)"></i>
+          <span class="ext-name">${esc(e.name)}</span>
+          <span class="ext-meta">${esc(e.vid)}/${esc(e.pids.join(" "))} · ${esc(e.file)}</span>
+          <a class="ext-export" href="/api/extensions/export?id=${encodeURIComponent(e.id)}"
+             download>${esc(t("ext.export"))}</a>
+        </div>`);
+    });
+    (data.errors || []).forEach((msg) => {
+      rows.push(`
+        <div class="ext-row is-error">
+          <i class="vdot" style="background:var(--bad)"></i>
+          <span class="ext-name">${esc(msg)}</span>
+        </div>`);
+    });
+    if (!rows.length) {
+      rows.push(`<div class="ext-empty">${esc(t("ext.empty"))}</div>`);
+    }
+    rows.push(`
+      <button class="btn btn-ghost" id="extReport" style="margin-top:6px">
+        ${esc(t("ext.report"))}
+      </button>`);
+    box.innerHTML = rows.join("");
+    const report = $("#extReport");
+    if (report) {
+      report.addEventListener("click", () => {
+        const a = document.createElement("a");
+        a.href = "/api/hid-report";
+        a.download = "hidcircus-hid-report.json";
+        a.click();
+      });
+    }
+    const dir = $("#extDir");
+    if (dir) dir.textContent = (data.dirs || []).join("  ·  ");
   }
 
   function renderPalettes(active) {
