@@ -1,17 +1,3 @@
-"""扩展系统：用声明式 JSON 描述一台设备怎么读、怎么写。
-
-为什么做成 JSON 而不是插件代码：
-- **安全**：加载扩展不会执行任何代码，只解析固定字段；写错最多读不到，不会乱发报文
-- **可协作**：有设备的用户（或他的 agent）照着协议填 JSON 就能适配，不需要懂 Python
-- **可审查**：一条扩展就是一个文件，能直接看、能贴进 issue
-
-支持的传输方式（够覆盖常见外设）：
-- `feature`：发一个 HID feature report，读回响应，按偏移取值（ASUS / 罗技一类的 0xCC、0x51 报文）
-- `razer`：91 字节雷蛇报文（自动补 XOR 校验）
-- `output`：发 HID output report（少数设备用）
-
-扩展文件放在 `extensions/*.json`；打包后放 `数据目录/extensions/`。
-"""
 
 import json
 import time
@@ -22,9 +8,6 @@ from .base import Device, Provider
 SPEC_VERSION = 1
 PKT_DEFAULT = 64
 RAZER_PKT = 91
-
-
-# ---------------------------------------------------------------- 解析工具
 
 def _as_int(value, default=None):
     """接受 12 / "12" / "0x0C" / "0x0C 0x00" 这类写法，取第一个数。"""
@@ -41,7 +24,6 @@ def _as_int(value, default=None):
         except ValueError:
             continue
     return default
-
 
 def _as_bytes(value):
     """把 "0x51 0x28 0x00" / "51 28 00" / [0x51, 0x28] 统一成 bytes。"""
@@ -62,7 +44,6 @@ def _as_bytes(value):
         except ValueError:
             return bytes(out)
     return bytes(out)
-
 
 def _template(template, values):
     """把 "0x51 0x28 {value}" 里的 {name} 换成数字（支持 le16/le32）。"""
@@ -89,7 +70,6 @@ def _template(template, values):
         else:
             data += _as_bytes(token)
     return bytes(data)
-
 
 def _extract(report, rule):
     """按 {offset, size, scale, equals, map_...} 从响应里取一个值。"""
@@ -122,9 +102,6 @@ def _extract(report, rule):
     if hi is not None:
         value = min(_as_int(hi, value), value)
     return value
-
-
-# ---------------------------------------------------------------- 校验
 
 def validate(data: dict, path: Path | None = None) -> list[str]:
     """返回错误列表，空列表表示可用。字段缺失都给出人能看懂的说明。"""
@@ -165,7 +142,7 @@ def validate(data: dict, path: Path | None = None) -> list[str]:
             errors.append(f"{where}read.{kind}.transport 不支持: {transport}")
             continue
         if transport == "razer":
-            # 雷蛇要 5 字节命令头
+
             if not rule.get("command"):
                 errors.append(f"{where}read.{kind} 用 razer 传输时必须给 command")
         elif not rule.get("request") and not rule.get("report_id"):
@@ -191,7 +168,6 @@ def validate(data: dict, path: Path | None = None) -> list[str]:
 
     return errors
 
-
 def _controls_of(ext):
     """把 write 里的 control 声明整理成前端好渲染的结构。"""
     out = []
@@ -212,9 +188,6 @@ def _controls_of(ext):
         }
         out.append(item)
     return out
-
-
-# ---------------------------------------------------------------- 运行时
 
 class Extension:
     """一份加载好的扩展。"""
@@ -268,7 +241,6 @@ class Extension:
             "file": self.path.name,
         }
 
-
 class ExtensionProvider(Provider):
     """把加载到的扩展当成一个 provider：按 vid/pid 匹配，按 JSON 读写。"""
 
@@ -278,8 +250,6 @@ class ExtensionProvider(Provider):
     def __init__(self, hid_module, extensions):
         self.hid = hid_module
         self.extensions = extensions
-
-    # ---------- 收发 ----------
 
     def _open(self, path, transport):
         if transport == "razer":
@@ -308,7 +278,7 @@ class ExtensionProvider(Provider):
 
     def _xfer(self, h, packet, transport, read_size=PKT_DEFAULT, timeout=0.8):
         if transport == "razer":
-            # 雷蛇：91 字节，CRC 落在 [89]，前面是 [0, 命令, sub, ...]
+
             buf = bytearray(RAZER_PKT)
             cmd = _as_bytes(packet)[:5]
             buf[:len(cmd)] = cmd
@@ -345,8 +315,6 @@ class ExtensionProvider(Provider):
             return bytes(data)
         return None
 
-    # ---------- 扫描 ----------
-
     def _read_one(self, h, kind, rule, values):
         transport = rule.get("transport", "feature")
         if transport == "razer":
@@ -363,7 +331,7 @@ class ExtensionProvider(Provider):
             got = _extract(resp, check)
             if got is not True:
                 return None, "响应不匹配"
-        # 取值规则在 value 里；个别扩展把 offset 直接写在规则上，也兼容一下
+
         value_rule = rule.get("value")
         if not isinstance(value_rule, dict):
             value_rule = {k: rule[k] for k in ("offset", "size", "scale",
@@ -414,7 +382,7 @@ class ExtensionProvider(Provider):
                 elif kind == "charging":
                     dev.charging = bool(value)
                 else:
-                    dev.extra[kind] = value      # 其它状态放进 extra，面板上能看到
+                    dev.extra[kind] = value                           
             if problems:
                 dev.note = "未读到: " + ", ".join(problems)
         finally:
@@ -423,8 +391,6 @@ class ExtensionProvider(Provider):
             except Exception:
                 pass
         return dev
-
-    # ---------- 控制 ----------
 
     def control(self, device_id: str, action: str, payload: dict) -> dict:
         ext_id = device_id.split(":", 1)[1] if ":" in device_id else device_id
@@ -444,7 +410,7 @@ class ExtensionProvider(Provider):
         transport = rule.get("transport", "feature")
         data = body
         if transport != "razer":
-            # 和读取一样，report_id 要拼在报文最前面（之前漏了这步，写入会被设备忽略）
+
             rid = _as_int(rule.get("report_id"))
             need = rid is not None and (not body or body[0] != rid)
             if need:
@@ -462,9 +428,6 @@ class ExtensionProvider(Provider):
         if rule.get("expect_reply") and resp is None:
             return {"ok": False, "error": "设备没有响应"}
         return {"ok": True}
-
-
-# ---------------------------------------------------------------- 加载
 
 def load_extensions(*directories):
     """从若干目录加载 *.json，返回 (扩展列表, 错误列表)。"""

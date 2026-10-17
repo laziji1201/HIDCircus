@@ -1,12 +1,3 @@
-"""ROG PELTA 耳机 provider。
-
-协议来源：G-Helper（GPL-3.0）的观察结果；
-本文件为独立实现，仅复现通信行为，未复制其代码。
-
-控制接口：usage_page = 0xFF00，64 字节 output/input report
-报文格式：[0xCC, 命令, 子命令, 0, 0, 数据...]
-读取用 0x12 前缀，写入用 0x41 / 0x51 / 0x61 前缀。
-"""
 
 import time
 from .base import Device, Provider
@@ -14,20 +5,16 @@ from .base import Device, Provider
 RID = 0xCC
 PKT = 64
 
-
 class AsusProvider(Provider):
     VENDOR = "asus"
     LABEL = "ASUS/ROG"
 
-    # 已验证的型号：PELTA（有线/2.4G 共用 0x1B84）
     KNOWN = {
         0x1B84: "ROG PELTA",
     }
 
     def __init__(self, hid_module):
         self.hid = hid_module
-
-    # ---------- 底层收发 ----------
 
     def _find_path(self, pid):
         for d in self.hid.enumerate(0x0B05, pid):
@@ -66,8 +53,6 @@ class AsusProvider(Provider):
     def _read(self, h, dev_id, cmd, sub):
         r = self._xfer(h, [RID, cmd, sub])
         return r
-
-    # ---------- 对外接口 ----------
 
     def _all_pids(self):
         """枚举本厂商所有带控制接口的型号。"""
@@ -127,8 +112,7 @@ class AsusProvider(Provider):
                     dev.note = "电量读取无响应"
                 if (r := self._read(h, dev.id, 0x12, 0x08)):
                     dev.charging = r[5] == 1
-                # 灯效开关：0x12/0x13 的 resp[5] == 1 表示灯效开着
-                # （真机验证：写 0x51/0x10 的 1 之后读回就是 1，写 0 读回 0）
+
                 if (r := self._read(h, dev.id, 0x12, 0x13)):
                     dev.extra["lighting_on"] = r[5] == 1
                 if (r := self._read(h, dev.id, 0x12, 0x03)):
@@ -136,11 +120,11 @@ class AsusProvider(Provider):
                         "mode": r[5], "brightness": r[6],
                         "color": [r[7], r[8], r[9]],
                     }
-                # 均衡器
+
                 if (r := self._read(h, dev.id, 0x12, 0x21)):
                     dev.extra["eq"] = {"enabled": r[5] == 1,
                                        "gains": list(r[6:16])}
-                # 降噪
+
                 if (r := self._read(h, dev.id, 0x41, 0x20)):
                     dev.extra["noise_reduction"] = {"enabled": r[5] == 1,
                                                     "level": r[6]}

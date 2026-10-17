@@ -1,22 +1,11 @@
-"""罗技 HID++ 2.0 provider。
-
-协议来源：Solaar 等公开项目的观察结果；本文件为独立实现。
-
-要点：
-- 短报告接口(7字节)发请求，长报告接口(20字节)收响应
-- feature 0x1004 是 BATTERY_STATUS，getStatus 返回电量
-- 有线直连设备 devIndex = 0xFF
-"""
 
 import time
 from .base import Device, Provider
-
 
 class LogitechProvider(Provider):
     VENDOR = "logitech"
     LABEL = "Logitech"
 
-    # 已验证；接收器场景后续按需补
     KNOWN = {
         0xC352: ("PRO X TKL", "keyboard"),
     }

@@ -1,11 +1,3 @@
-"""HIDCircus —— 多厂商外设统一控制面板（本地服务）。
-
-零云依赖：只在本机 127.0.0.1 起一个 HTTP 服务，桌面外壳（WebView2）和浏览器共用同一套页面。
-
-注意并发：托盘线程、HTTP 请求线程都会调 collect_devices()。
-同一个 HID 设备被两处同时打开会互相抢响应，所以扫描必须串行，并带一层
-短时缓存把同一时刻的多次请求合并成一次真实扫描。
-"""
 
 import json
 import os
@@ -23,12 +15,11 @@ import hid
 from providers import build_providers
 
 HOST = "127.0.0.1"
-PORT = int(os.environ.get("HIDCIRCUS_PORT", "8777"))   # 端口冲突时可用环境变量覆盖
-PORT_TRIES = 8          # 端口被占用时依次往后试
-CACHE_TTL = 2.0         # 秒，这个时间内重复请求复用上一次扫描结果
-MAX_BACKGROUND = 12 * 1024 * 1024   # 背景图上限 12MB
+PORT = int(os.environ.get("HIDCIRCUS_PORT", "8777"))                  
+PORT_TRIES = 8                       
+CACHE_TTL = 2.0                               
+MAX_BACKGROUND = 12 * 1024 * 1024               
 
-# PyInstaller onefile 会把资源解压到 _MEIPASS
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys._MEIPASS)
     DATA_DIR = Path(sys.executable).resolve().parent
@@ -39,41 +30,36 @@ WEB_DIR = BASE_DIR / "web"
 ASSET_DIR = BASE_DIR / "assets"
 CONFIG_PATH = DATA_DIR / "config.json"
 BACKGROUND_DIR = DATA_DIR / "assets" / "background"
-# 扩展目录：用户自己写的适配文件放这里（打包后跟 exe 同级的 extensions/）
+
 EXTENSION_DIRS = list(dict.fromkeys([DATA_DIR / "extensions",
                                     BASE_DIR / "extensions"]))
 
 PROVIDERS = build_providers(hid, EXTENSION_DIRS)
 
 DEFAULT_SETTINGS = {
-    "theme": "auto",        # auto | dark | light
-    "language": "zh",       # zh | en
-    "background": "",       # 背景图文件名，空字符串表示不使用
-    "bg_dim": 0.72,         # 背景遮罩强度 0–0.95
-    "bg_blur": 0,           # 背景模糊半径 0–24 px
-    "refresh_seconds": 10,  # 自动刷新间隔
-    "device_order": [],     # 用户拖拽出来的设备顺序（设备 id 列表）
-    "aliases": {},          # device_id -> 自定义名字
-    "palette": "silver",    # 配色预设 silver / amber / sakura / neon
-    "motion": "auto",       # auto=跟随系统（关掉动画时少做位移） / on=始终开启动效
+    "theme": "auto",                             
+    "language": "zh",                
+    "background": "",                         
+    "bg_dim": 0.72,                        
+    "bg_blur": 0,                           
+    "refresh_seconds": 10,          
+    "device_order": [],                            
+    "aliases": {},                              
+    "palette": "silver",                                         
+    "motion": "auto",                                         
 }
 
-# 运行状态（app.py 启动后回填，供页面显示托盘是否可用）
-STATUS = {"tray": None, "port": None, "log": "", "last_ping": 0.0}
+VERSION = "1.2.0"
+STATUS = {"tray": None, "port": None, "log": "", "last_ping": 0.0,
+          "version": VERSION, "pid": os.getpid()}
 
-# 页面发过来、由桌面壳（app.py）执行的请求：0 表示没有
 UI_REQUESTS = {"panel": 0.0, "show": 0.0}
 
-# 本机随机 token：只有页面知道自己该带什么，别的程序随手调不了 /api/control。
-# 注意它只防"顺手误调/顺手乱改"，不是网络级安全（服务只监听 127.0.0.1）。
 SESSION_TOKEN = secrets.token_urlsafe(18)
 
 _scan_lock = threading.Lock()
 _cache = {"at": 0.0, "devices": []}
 _settings_lock = threading.Lock()
-
-
-# ---------- 配置读写 ----------
 
 def load_settings():
     data = dict(DEFAULT_SETTINGS)
@@ -86,7 +72,6 @@ def load_settings():
     except (OSError, ValueError):
         pass
     return data
-
 
 def save_settings(patch):
     """合并写入。先写临时文件再替换，避免写一半断电留下坏配置。"""
@@ -101,9 +86,6 @@ def save_settings(patch):
         tmp.replace(CONFIG_PATH)
         return data
 
-
-# ---------- 设备扫描 ----------
-
 def create_server():
     """依次尝试端口，返回 (server, 实际端口)。"""
     last_error = None
@@ -116,28 +98,21 @@ def create_server():
             continue
     raise OSError(f"{PORT}–{PORT + PORT_TRIES - 1} 全部被占用: {last_error}")
 
-
 def _scan_all():
     out = []
     for p in PROVIDERS:
         try:
             for d in p.scan():
                 item = d.to_dict()
-                item["vendor_key"] = p.VENDOR   # 稳定标识，客户端别靠显示名匹配
+                item["vendor_key"] = p.VENDOR                    
                 out.append(item)
-        except Exception as e:  # 单个 provider 出错不影响其他
+        except Exception as e:                       
             out.append({"id": f"{p.VENDOR}:error", "name": p.LABEL,
                         "vendor": p.LABEL, "vendor_key": p.VENDOR,
                         "connected": False, "note": f"扫描异常: {e}"})
     return _drop_duplicate_extensions(out)
 
-
 def _drop_duplicate_extensions(devices):
-    """内置 provider 已经认出的设备，不再被扩展重复报一份。
-
-    内置型号 id 形如 `razer:00c1`（末尾是 product id），扩展设备的 extra 里带着
-    自己的 pid。两者撞上就丢掉扩展那份，避免面板出现两台一模一样的设备。
-    """
     from providers import EXTENSIONS
     builtin_pids = set()
     for d in devices:
@@ -156,10 +131,9 @@ def _drop_duplicate_extensions(devices):
         ext = next((e for e in EXTENSIONS if e.id == info.get("id")), None)
         pids = {f"{p:04x}" for p in (ext.pids if ext else [])}
         if pids & builtin_pids:
-            continue                     # 内置已经能读，扩展跳过
+            continue                                  
         kept.append(d)
     return kept
-
 
 def collect_devices(force=False):
     """枚举所有设备。串行执行 + 短时缓存，避免多线程抢 HID 句柄。"""
@@ -176,7 +150,6 @@ def collect_devices(force=False):
         _cache["at"] = time.time()
     return [dict(d) for d in devices]
 
-
 def _apply_aliases(devices):
     """把用户起的名字套到设备上（改完后名称即别名，原厂名留在 raw_name）。"""
     aliases = load_settings().get("aliases") or {}
@@ -186,7 +159,6 @@ def _apply_aliases(devices):
         if alias:
             d["name"] = alias
 
-
 def do_control(vendor, device_id, action, payload):
     """执行控制写入。与扫描共用同一把锁，避免写入和扫描抢同一个 HID 句柄。"""
     with _scan_lock:
@@ -194,12 +166,9 @@ def do_control(vendor, device_id, action, payload):
             if p.VENDOR == vendor:
                 result = p.control(device_id, action, payload)
                 if result.get("ok"):
-                    _cache["at"] = 0.0  # 状态变了，让下次读走真扫描
+                    _cache["at"] = 0.0                 
                 return result
     return {"ok": False, "error": f"未知厂商: {vendor}"}
-
-
-# ---------- HTTP ----------
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -217,7 +186,6 @@ CONTENT_TYPES = {
 IMAGE_EXT = {"image/png": ".png", "image/jpeg": ".jpg",
              "image/webp": ".webp", "image/gif": ".gif"}
 
-
 def _debug_log(msg):
     """请求日志，只在 HIDCIRCUS_DEBUG=1 时写（排查"浏览器到底连没连上"用）。"""
     if os.environ.get("HIDCIRCUS_DEBUG") != "1":
@@ -230,25 +198,15 @@ def _debug_log(msg):
     except Exception:
         pass
 
-
 class LocalServer(ThreadingHTTPServer):
-    """本地 HTTP 服务。
-
-    Windows 的 SO_REUSEADDR 语义和 Unix 不同：开着它时第二个进程能抢占同一端口，
-    导致「端口被占用却以为自己绑上了」。所以 Windows 下关掉，让占用能被检测到，
-    交给 create_server() 顺延端口。
-    """
     daemon_threads = True
     allow_reuse_address = sys.platform != "win32"
-
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "HIDCircus"
 
     def log_message(self, *args):
-        pass  # 静默访问日志
-
-    # ----- 工具 -----
+        pass          
 
     def _send(self, body: bytes, content_type="application/json", status=200,
               extra_headers=None):
@@ -280,7 +238,7 @@ class Handler(BaseHTTPRequestHandler):
                  "palette": s.get("palette", "silver"),
                  "language": s.get("language", "zh")}
         html = html.replace("__PREFS_JSON__", json.dumps(prefs))
-        # 页面拿这个 token 才能调写入接口，别的本机程序读不到它
+
         html = html.replace("__SESSION_TOKEN__", SESSION_TOKEN)
         self._send(html.encode("utf-8"), "text/html; charset=utf-8")
 
@@ -305,8 +263,6 @@ class Handler(BaseHTTPRequestHandler):
         if WEB_DIR.resolve() not in target.parents and target != WEB_DIR.resolve():
             return None
         return target
-
-    # ----- GET -----
 
     def do_GET(self):
         route = urlparse(self.path).path
@@ -362,14 +318,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._json({"error": "not found"}, 404)
 
-    # ----- 写入 -----
-
     def do_POST(self):
         route = urlparse(self.path).path
         _debug_log(f"POST {self.path}")
         raw = self._read_body()
 
-        # ping 不校验（心跳要简单可靠），其余写入接口都要
         if route not in ("/api/ping", "/api/show") and not self._require_token():
             return
 
@@ -400,7 +353,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(aliases, dict):
                     self._json({"ok": False, "error": "aliases 必须是对象"}, 400)
                     return
-                # 只保留 "字符串键 -> 短字符串值"，防止塞进奇怪的东西
+
                 patch["aliases"] = {str(k)[:64]: str(v)[:24]
                                     for k, v in aliases.items() if v}
             self._json({"ok": True, "settings": save_settings(patch)})
@@ -415,7 +368,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True})
             return
         if route == "/api/show":
-            # 重复启动时：让已在运行的实例把原生面板弹出来
+
             UI_REQUESTS["show"] = time.time()
             self._json({"ok": True})
             return
@@ -484,12 +437,6 @@ class Handler(BaseHTTPRequestHandler):
             "Content-Disposition": f'attachment; filename="{ext.path.name}"'})
 
     def _hid_report(self):
-        """枚举所有 HID 接口，产出给维护者看的探测报告。
-
-        面对一台没适配的设备，用户点一下就能拿到这份 JSON 发给维护者：
-        里面是接口列表（vid/pid/usage/产品名）+ 扩展模板骨架 + 环境信息。
-        不包含任何读数尝试，避免向未知设备乱发报文。
-        """
         from providers import EXTENSIONS
         entries = []
         try:
@@ -508,10 +455,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": f"枚举失败: {e}"}, 500)
             return
 
-        # 已经适配过的 vid/pid 标出来，方便维护者跳过
         covered = [f"0x{e.vid:04X}:" + "/".join(f"0x{p:04X}" for p in e.pids)
                    for e in EXTENSIONS]
-        from providers import build_providers as _bp  # noqa: F401  (说明用，不调用)
+        from providers import build_providers as _bp                         
 
         report = {
             "_what": "HIDCircus 设备探测报告，可发给维护者用于适配",
@@ -557,14 +503,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": False, "error": "图片为空或超过 12MB"}, 400)
             return
         BACKGROUND_DIR.mkdir(parents=True, exist_ok=True)
-        for old in BACKGROUND_DIR.iterdir():      # 旧图删掉
+        for old in BACKGROUND_DIR.iterdir():            
             if old.is_file():
                 old.unlink(missing_ok=True)
         name = f"bg{ext}"
         (BACKGROUND_DIR / name).write_bytes(raw)
         settings = save_settings({"background": name})
         self._json({"ok": True, "settings": settings})
-
 
 def autostart_enabled():
     """计划任务是否存在（普通用户查询自己的任务不需要权限）。"""
@@ -576,12 +521,7 @@ def autostart_enabled():
     except Exception:
         return False
 
-
 def set_autostart(enabled: bool):
-    """注册/移除开机自启计划任务（调用 tools/setup.ps1）。
-
-    普通用户权限就能注册"以当前用户身份运行"的任务，不需要管理员。
-    """
     script = BASE_DIR / "tools" / "setup.ps1"
     if not script.exists():
         return {"ok": False, "error": "找不到 tools/setup.ps1"}
@@ -602,7 +542,6 @@ def set_autostart(enabled: bool):
     except Exception as e:
         return {"ok": False, "error": f"执行失败: {e}"}
 
-
 def main():
     server, port = create_server()
     print(f"HIDCircus 已启动: http://{HOST}:{port}")
@@ -610,7 +549,6 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n已停止")
-
 
 if __name__ == "__main__":
     main()

@@ -1,24 +1,9 @@
-"""通用兜底 provider：从 Windows 的电池类设备读取电量。
-
-为什么需要它：每家外设的电量协议都是私有的（罗技 HID++、雷蛇 feature report、
-ROG 0xCC 报文……），不可能"一个读取逻辑通吃"。但很多无线外设（蓝牙键鼠、
-部分接收器）会被 Windows 识别成一个电池设备，这时可以用系统接口读到电量——
-这是唯一能做到跨品牌的来源。
-
-**适用范围有限**：
-- 只覆盖"Windows 认为它有电池"的设备；没被识别成电池设备的厂商私有协议设备
-  这里读不到，需要像 asus/logitech/razer 那样写专属 provider
-- 过滤掉 ACPI 的笔记本电池，只留外设
-
-这些设备只有系统给的电池数据，没有厂商专有控制项，所以 `control()` 一律不支持。
-"""
 
 import ctypes
 from ctypes import wintypes as w
 
 from .base import Device, Provider
 
-# ---- SetupAPI / 电池 IOCTL ----
 setupapi = ctypes.WinDLL("setupapi", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
@@ -36,35 +21,27 @@ IOCTL_BATTERY_QUERY_STATUS = 0x29404C
 BATTERY_POWER_ON_LINE = 0x00000001
 BATTERY_CHARGING = 0x00000008
 
-
 class GUID(ctypes.Structure):
     _fields_ = [("Data1", w.DWORD), ("Data2", w.WORD), ("Data3", w.WORD),
                 ("Data4", ctypes.c_ubyte * 8)]
 
-
-# {72631E54-78A4-11D0-BCF7-00AA00B7B32A} 电池设备类
 GUID_DEVCLASS_BATTERY = GUID(0x72631E54, 0x78A4, 0x11D0,
                              (ctypes.c_ubyte * 8)(0xBC, 0xF7, 0x00, 0xAA, 0x00, 0xB7, 0xB3, 0x2A))
-
 
 class SP_DEVICE_INTERFACE_DATA(ctypes.Structure):
     _fields_ = [("cbSize", w.DWORD), ("InterfaceClassGuid", GUID),
                 ("Flags", w.DWORD), ("Reserved", ctypes.POINTER(w.DWORD))]
 
-
 class SP_DEVICE_INTERFACE_DETAIL_DATA_W(ctypes.Structure):
     _fields_ = [("cbSize", w.DWORD), ("DevicePath", w.WCHAR * 1024)]
-
 
 class SP_DEVINFO_DATA(ctypes.Structure):
     _fields_ = [("cbSize", w.DWORD), ("ClassGuid", GUID),
                 ("DevInst", w.DWORD), ("Reserved", ctypes.c_void_p)]
 
-
 class BATTERY_QUERY_INFORMATION(ctypes.Structure):
     _fields_ = [("BatteryTag", w.ULONG), ("InformationLevel", w.ULONG),
                 ("AtRate", w.LONG)]
-
 
 class BATTERY_INFORMATION(ctypes.Structure):
     _fields_ = [("Capabilities", w.ULONG), ("Technology", ctypes.c_ubyte),
@@ -73,17 +50,14 @@ class BATTERY_INFORMATION(ctypes.Structure):
                 ("DefaultAlert1", w.ULONG), ("DefaultAlert2", w.ULONG),
                 ("CriticalBias", w.ULONG), ("CycleCount", w.ULONG)]
 
-
 class BATTERY_WAIT_STATUS(ctypes.Structure):
     _fields_ = [("BatteryTag", w.ULONG), ("Timeout", w.ULONG),
                 ("PowerState", w.ULONG), ("LowCapacity", w.ULONG),
                 ("HighCapacity", w.ULONG)]
 
-
 class BATTERY_STATUS(ctypes.Structure):
     _fields_ = [("PowerState", w.ULONG), ("Capacity", w.ULONG),
                 ("Voltage", w.ULONG), ("Rate", w.LONG)]
-
 
 setupapi.SetupDiGetClassDevsW.restype = HANDLE
 setupapi.SetupDiGetClassDevsW.argtypes = [ctypes.POINTER(GUID), w.LPCWSTR, w.HWND, w.DWORD]
@@ -117,13 +91,11 @@ GENERIC_WRITE = 0x40000000
 FILE_SHARE_RW = 0x03
 OPEN_EXISTING = 3
 
-
 def _ioctl(h, code, inbuf, insize, outbuf, outsize):
     ret = w.DWORD(0)
     ok = kernel32.DeviceIoControl(h, code, inbuf, insize, outbuf, outsize,
                                   ctypes.byref(ret), None)
     return ok and ret.value > 0
-
 
 def _read_battery(path):
     """读一个电池设备，返回 (百分比, 是否充电) 或 None。"""
@@ -133,14 +105,14 @@ def _read_battery(path):
         return None
     try:
         tag = w.ULONG(0)
-        wait = w.ULONG(0)   # 不等待，立刻返回
+        wait = w.ULONG(0)             
         if not _ioctl(h, IOCTL_BATTERY_QUERY_TAG, ctypes.byref(wait), 4,
                       ctypes.byref(tag), 4):
             return None
         if not tag.value:
             return None
 
-        query = BATTERY_QUERY_INFORMATION(tag.value, 0, 0)   # 0 = BatteryInformation
+        query = BATTERY_QUERY_INFORMATION(tag.value, 0, 0)                           
         info = BATTERY_INFORMATION()
         if not _ioctl(h, IOCTL_BATTERY_QUERY_INFORMATION, ctypes.byref(query),
                       ctypes.sizeof(query), ctypes.byref(info), ctypes.sizeof(info)):
@@ -161,7 +133,6 @@ def _read_battery(path):
         return max(0, min(100, percent)), charging
     finally:
         kernel32.CloseHandle(h)
-
 
 def _device_name(hdev, devinfo):
     buf = ctypes.create_unicode_buffer(256)
@@ -206,7 +177,6 @@ def _dump_battery_devices():
         setupapi.SetupDiDestroyDeviceInfoList(hdev)
     return out
 
-
 class GenericBatteryProvider(Provider):
     """把 Windows 认得的"外设电池设备"作为设备列出来。"""
 
@@ -221,7 +191,7 @@ class GenericBatteryProvider(Provider):
         for entry in _dump_battery_devices():
             name = entry["name"] or "未命名电池设备"
             path = entry["path"]
-            # 笔记本自身电池走 ACPI，不算外设
+
             if "ACPI" in name.upper() or "ACPI" in path.upper():
                 continue
             reading = _read_battery(path)

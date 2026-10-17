@@ -1,18 +1,3 @@
-"""HIDCircus 桌面入口：本地服务 + 面板窗口 + 系统托盘。
-
-窗口策略（按顺序降级，任何一步成功就停）：
-    1. Chromium 系浏览器的 --app 模式（Edge / Chrome / Brave / Vivaldi），无边框
-    2. 清空配置副本再来一次（配置被强杀污染时会卡在错误页）
-    3. 关掉 GPU 再来一次（渲染进程崩溃的常见原因）
-    4. 默认浏览器开一个普通标签页（任何环境都能用）
-
-判定"打开成功"不看窗口标题，而看页面回的心跳：不管用什么浏览器、有没有边框，
-页面起来就会 POST /api/ping，这里收到就算成功。标题法在真实环境里太不可靠
-（曾经把「HIDCircus - 文件资源管理器」当成面板）。
-
-托盘用 Win32 `Shell_NotifyIcon`（见 tray.py）。托盘不可用时，进程生命周期由
-页面心跳决定：90 秒没有心跳就认为面板已关闭，进程退出。
-"""
 
 import ctypes
 import json
@@ -35,7 +20,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from server import (create_server, collect_devices, do_control, load_settings,
-                    STATUS, UI_REQUESTS,
+                    STATUS, UI_REQUESTS, VERSION,
                     HOST, PORT, PORT_TRIES)
 from flyout import Flyout
 from tray import Tray
@@ -51,22 +36,12 @@ _icon = None
 _stop = threading.Event()
 _ui_queue = queue.Queue()
 _low_integrity = False
-_flyout_open = False            # 小面板同时只开一个
-
-
-# ---------------------------------------------------------------- 环境
+_flyout_open = False                       
 
 INTEGRITY_LEVELS = {0x0000: "不可信", 0x1000: "低（受限）", 0x2000: "中",
                     0x2100: "中+", 0x3000: "高（管理员）", 0x4000: "系统"}
 
-
 def current_integrity(pid=None):
-    """当前进程的完整性级别。
-
-    低完整性进程（沙箱、某些自动化工具派生出来的）不能和任务栏通信，
-    Shell_NotifyIcon 会返回拒绝访问；拉起的浏览器也可能被提示"实例以提升权限运行"。
-    把级别写进日志，排查时一眼能分辨是环境问题还是代码问题。
-    """
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     advapi32.OpenProcessToken.restype = w.BOOL
     advapi32.OpenProcessToken.argtypes = [ctypes.c_void_p, w.DWORD,
@@ -99,7 +74,6 @@ def current_integrity(pid=None):
         if token:
             kernel32.CloseHandle(token)
 
-
 def parent_process():
     """谁启动了我们（排查"低权限"是从哪个入口继承来的）。"""
     try:
@@ -116,13 +90,7 @@ def parent_process():
     except Exception:
         return "未知"
 
-
 def warn_low_integrity():
-    """低权限时用系统弹窗说清楚，并给一条提权重启的路。
-
-    低完整性进程不能和任务栏通信（托盘必然失败），拉起的浏览器也跑不起来。
-    这不是代码能绕开的，只能靠换一个正常权限的入口启动。
-    """
     user32.MessageBoxW.restype = ctypes.c_int
     user32.MessageBoxW.argtypes = [w.HWND, w.LPCWSTR, w.LPCWSTR, w.UINT]
     if getattr(sys, "frozen", False):
@@ -136,8 +104,8 @@ def warn_low_integrity():
         "点「确定」立即用管理员权限重启一次（会弹 UAC）。点「取消」继续以低权限运行。"
     )
     result = user32.MessageBoxW(None, text, "HIDCircus 权限不足",
-                                0x04 | 0x30 | 0x40000)   # YESNO | WARNING | TOPMOST
-    if result == 6:                                     # IDYES
+                                0x04 | 0x30 | 0x40000)                              
+    if result == 6:                                            
         try:
             shell32 = ctypes.WinDLL("shell32", use_last_error=True)
             shell32.ShellExecuteW.restype = ctypes.c_void_p
@@ -149,9 +117,6 @@ def warn_low_integrity():
         except Exception:
             log("提权重启失败: " + traceback.format_exc())
 
-
-# ---------------------------------------------------------------- 日志
-
 def log_dir():
     base = (Path(sys.executable).resolve().parent
             if getattr(sys, "frozen", False) else ROOT)
@@ -159,9 +124,7 @@ def log_dir():
     d.mkdir(exist_ok=True)
     return d
 
-
 LOG_FILE = log_dir() / "app.log"
-
 
 _SCRUB_RULES = (
     (re.compile(r"([A-Za-z]:\\Users\\)[^\\\s]+"), r"\1<user>"),
@@ -169,14 +132,12 @@ _SCRUB_RULES = (
     (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "<email>"),
 )
 
-
 def _scrub(msg):
     """日志脱敏：用户名、疑似序列号、邮箱都不该写进日志文件。"""
     text = str(msg)
     for pattern, repl in _SCRUB_RULES:
         text = pattern.sub(repl, text)
     return text
-
 
 def log(msg):
     """pythonw 没有控制台，出错只能靠文件留痕。"""
@@ -189,12 +150,8 @@ def log(msg):
     except Exception:
         pass
 
-
-# ---------------------------------------------------------------- 托盘图标
-
 ICON_PATH = ROOT / "assets" / "icon.png"
 _ICON_BASE = None
-
 
 def _icon_base():
     global _ICON_BASE
@@ -205,7 +162,6 @@ def _icon_base():
             _ICON_BASE = False
             log("图标文件读不到，托盘退回默认画法")
     return _ICON_BASE or None
-
 
 def make_icon(battery):
     """托盘图标：用设计稿图标，低电量时右下角加个红点。"""
@@ -236,7 +192,6 @@ def make_icon(battery):
                   fill=(248, 113, 113, 255), outline=(15, 15, 18, 255), width=3)
     return img
 
-
 def update_tray(force=False):
     if _icon is None:
         return None
@@ -251,46 +206,33 @@ def update_tray(force=False):
         log("托盘刷新异常: " + traceback.format_exc())
         return None
 
-
 def poll_loop():
     while not _stop.is_set():
         update_tray()
         _stop.wait(TRAY_POLL)
-
-
-# ---------------------------------------------------------------- 设备插拔
 
 WM_DEVICECHANGE = 0x0219
 DBT_DEVICEARRIVAL = 0x8000
 DBT_DEVICEREMOVECOMPLETE = 0x8004
 DEVICE_NOTIFY_WINDOW_HANDLE = 0
 
-
 class _GUID(ctypes.Structure):
     _fields_ = [("Data1", w.DWORD), ("Data2", w.WORD), ("Data3", w.WORD),
                 ("Data4", ctypes.c_ubyte * 8)]
-
 
 class _DEV_BROADCAST_DEVICEINTERFACE(ctypes.Structure):
     _fields_ = [("dbcc_size", w.DWORD), ("dbcc_devicetype", w.DWORD),
                 ("dbcc_reserved", w.DWORD), ("dbcc_classguid", _GUID),
                 ("dbcc_name", w.WCHAR * 1)]
 
-
-# {4D1E55B2-F16F-11CF-88CB-001111000030} = HID 设备接口
 _HID_IFACE = _GUID(0x4D1E55B2, 0xF16F, 0x11CF,
                    (ctypes.c_ubyte * 8)(0x88, 0xCB, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30))
 
-
 def start_device_watch():
-    """监听设备插拔：插上鼠标/耳机立刻刷新，不用等下一次轮询。
-
-    用一个隐藏窗口收 WM_DEVICECHANGE，避免给每台设备开线程。
-    """
     user32.RegisterDeviceNotificationW.restype = ctypes.c_void_p
     user32.RegisterDeviceNotificationW.argtypes = [w.HWND, ctypes.c_void_p, w.DWORD]
     user32.CreateWindowExW.restype = w.HWND
-    # 参数用 c_void_p：LPARAM 里是指针，用有符号整型会在高位为 1 时抛 OverflowError
+
     proc = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, w.HWND, w.UINT,
                               ctypes.c_void_p, ctypes.c_void_p)(_device_wndproc)
 
@@ -315,7 +257,7 @@ def start_device_watch():
 
     filt = _DEV_BROADCAST_DEVICEINTERFACE()
     filt.dbcc_size = ctypes.sizeof(_DEV_BROADCAST_DEVICEINTERFACE)
-    filt.dbcc_devicetype = 5          # DBT_DEVTYP_DEVICEINTERFACE
+    filt.dbcc_devicetype = 5                                      
     filt.dbcc_classguid = _HID_IFACE
     notify = user32.RegisterDeviceNotificationW(hwnd, ctypes.byref(filt),
                                                 DEVICE_NOTIFY_WINDOW_HANDLE)
@@ -328,12 +270,11 @@ def start_device_watch():
         user32.TranslateMessage(ctypes.byref(msg))
         user32.DispatchMessageW(ctypes.byref(msg))
 
-
 def _device_wndproc(hwnd, msg, wparam, lparam):
     try:
         if msg == WM_DEVICECHANGE and int(wparam or 0) in (DBT_DEVICEARRIVAL,
                                                            DBT_DEVICEREMOVECOMPLETE):
-            # 给系统一点时间枚举完新设备，再强制重扫
+
             def _rescan():
                 time.sleep(0.8)
                 try:
@@ -345,13 +286,10 @@ def _device_wndproc(hwnd, msg, wparam, lparam):
             return 0
     except Exception:
         pass
-    # c_void_p 只接受非负整数，而 LPARAM 经常是负数，先按无符号取一遍
+
     wp = int(wparam or 0) & 0xFFFFFFFFFFFFFFFF
     lp = int(lparam or 0) & 0xFFFFFFFFFFFFFFFF
     return user32.DefWindowProcW(hwnd, msg, ctypes.c_void_p(wp), ctypes.c_void_p(lp))
-
-
-# ---------------------------------------------------------------- 窗口识别
 
 def _process_name(hwnd):
     """窗口属于哪个进程（只取 exe 名）。"""
@@ -364,7 +302,7 @@ def _process_name(hwnd):
     kernel32.QueryFullProcessImageNameW.argtypes = [
         ctypes.c_void_p, w.DWORD, w.LPWSTR, ctypes.POINTER(w.DWORD)]
     kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-    handle = kernel32.OpenProcess(0x1000, False, pid.value)   # QUERY_LIMITED_INFORMATION
+    handle = kernel32.OpenProcess(0x1000, False, pid.value)                              
     if not handle:
         return ""
     try:
@@ -375,7 +313,6 @@ def _process_name(hwnd):
         return Path(buf.value).name.lower()
     finally:
         kernel32.CloseHandle(handle)
-
 
 def _enum_windows():
     found = []
@@ -393,14 +330,7 @@ def _enum_windows():
     user32.EnumWindows(_cb, 0)
     return found
 
-
 def panel_windows():
-    """只认"我们自己的面板窗口"。
-
-    不能按标题模糊匹配：资源管理器窗口标题是「HIDCircus - 文件资源管理器」，
-    也包含 HIDCircus，早先会把那个文件夹窗口当成面板（用户点了启动却什么都不发生）。
-    所以要求：标题以应用名开头、不含 " - "、进程是 msedge.exe。
-    """
     out = []
     for hwnd, title in _enum_windows():
         if not title.startswith(APP_NAME):
@@ -412,9 +342,6 @@ def panel_windows():
         out.append(hwnd)
     return out
 
-
-# ---------------------------------------------------------------- 浏览器
-
 CHROMIUM_CANDIDATES = [
     ("Edge", [r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
               r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"]),
@@ -423,7 +350,6 @@ CHROMIUM_CANDIDATES = [
     ("Brave", [r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"]),
     ("Vivaldi", [r"C:\Program Files\Vivaldi\Application\vivaldi.exe"]),
 ]
-
 
 def find_browser():
     """找一个支持 --app 无边框窗口的 Chromium 系浏览器。"""
@@ -437,13 +363,7 @@ def find_browser():
             return exe, found
     return None, None
 
-
 def kill_stale_browsers(profile: Path):
-    """杀掉上次残留、还在用我们这个配置目录的浏览器进程。
-
-    窗口被关掉/进程被强杀后可能留着一个后台进程，再启动会交给那个旧实例
-    （它可能已经崩了），新窗口就永远停在"已崩溃"。只按配置目录精确匹配。
-    """
     if sys.platform != "win32":
         return
     script = (
@@ -458,24 +378,18 @@ def kill_stale_browsers(profile: Path):
     except Exception:
         pass
 
-
 EDGE_BROWSER_FLAGS = [
     "--no-first-run",
     "--no-default-browser-check",
-    "--disable-sync",                 # 别把系统账号同步进我们的独立配置
+    "--disable-sync",                                   
     "--no-service-autorun",
     "--disable-session-crashed-bubble",
     "--hide-crash-restore-bubble",
     "--disable-features=Translate,MediaRouter,msEdgeSyncPromo",
-    "--no-proxy-server",              # 本机回环不该走代理
+    "--no-proxy-server",                         
 ]
 
-
 def seed_profile(profile: Path):
-    """给独立配置目录预置偏好，压掉 Edge 的登录/同步/首次运行气泡。
-
-    这些只作用于我们自己那份配置，不动用户平时用的 Edge。
-    """
     default = profile / "Default"
     prefs = default / "Preferences"
     if prefs.exists():
@@ -492,7 +406,6 @@ def seed_profile(profile: Path):
     except OSError:
         pass
 
-
 def clean_profile_state(profile: Path):
     """清掉会话恢复文件（被强杀后留下的"崩溃会话"会让新窗口卡在错误页）。"""
     default = profile / "Default"
@@ -507,12 +420,7 @@ def clean_profile_state(profile: Path):
         except OSError:
             pass
 
-
 def _elevation_dialog():
-    """有没有 Edge 弹出的"现有实例正在以提升的权限运行"对话框。
-
-    有的话继续重试只会弹更多一模一样的窗口，必须立刻停手。
-    """
     for hwnd, title in _enum_windows():
         if title.strip() != "Microsoft Edge":
             continue
@@ -520,11 +428,9 @@ def _elevation_dialog():
             return True
     return False
 
-
 def page_alive(since):
     """页面有没有在 since 之后回过心跳。"""
     return (STATUS.get("last_ping") or 0) >= since
-
 
 def wait_for_page(since, timeout):
     deadline = time.time() + timeout
@@ -533,7 +439,6 @@ def wait_for_page(since, timeout):
             return True
         time.sleep(0.4)
     return False
-
 
 def _spawn_window(browser, url, profile: Path, wipe=False, extra=()):
     if wipe:
@@ -561,20 +466,18 @@ def _spawn_window(browser, url, profile: Path, wipe=False, extra=()):
         log("启动窗口失败: " + traceback.format_exc())
         return False
 
-
 def _profile_candidates():
     """先用手上这份配置；不行再换一份全新的（避开被提权实例锁住的那份）。"""
     base = ROOT / ".runtime"
     yield base / "browser-profile"
     yield base / f"browser-profile-{int(time.time()) % 100000}"
 
-
 def open_panel(port):
     """把面板打开；已经开着就提到前台。"""
     existing = panel_windows()
     if existing:
         for hwnd in existing:
-            user32.ShowWindow(hwnd, 9)          # SW_RESTORE
+            user32.ShowWindow(hwnd, 9)                      
             user32.SetForegroundWindow(hwnd)
         if page_alive(time.time() - 30):
             return True
@@ -583,9 +486,6 @@ def open_panel(port):
     name, browser = find_browser()
     log(f"可用浏览器: {name or '无'}")
 
-    # 低权限进程拉起来的浏览器也是低权限，页面加载不出来；
-    # 更糟的是会撞上"已有以提升权限运行的 Edge"，弹一堆对话框。
-    # 所以这种情况下干脆不拉浏览器，直接把地址给用户。
     if _low_integrity:
         log(f"低权限会话：不尝试自动开窗，请手动访问 {url}")
         threading.Thread(target=warn_low_integrity, daemon=True).start()
@@ -621,21 +521,18 @@ def open_panel(port):
         log(f"面板已在默认浏览器打开: {url}")
         return True
     log(f"面板没能自动打开，请手动访问 {url}")
-    # 到头来还是打不开：至少让用户看到一句人话，而不是双击后什么都没发生
+
     if _low_integrity:
         threading.Thread(target=warn_low_integrity, daemon=True).start()
     return False
 
-
 _handled = {"panel": 0.0}
-
 
 def close_flyout():
     """关掉原生小面板（如果开着）。"""
     hwnd = user32.FindWindowW("HIDCircusFlyout", None)
     if hwnd:
         user32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)
-
 
 def _relaunch_elevated():
     """用管理员权限重启自己（一次 UAC）。成功返回 True。"""
@@ -650,8 +547,7 @@ def _relaunch_elevated():
         else:
             exe = sys.executable
             params = f'"{ROOT / "app.py"}" --elevated'
-        # ShellExecuteW("runas") 会一直等 UAC 响应；某些环境（无人值守/策略禁用）
-        # 下可能永远不返回，所以放到线程里并加超时，超时就当提权失败继续跑。
+
         outcome = {"ok": False}
 
         def _call():
@@ -669,7 +565,6 @@ def _relaunch_elevated():
         log("提权重启异常: " + traceback.format_exc())
         return False
 
-
 def _system_is_dark():
     """系统主题是深色还是浅色（主题设为 auto 时用）。"""
     try:
@@ -680,7 +575,6 @@ def _system_is_dark():
             return value == 0
     except Exception:
         return True
-
 
 FLYOUT_COLORS = {
     ("dark", "amber"): dict(bg=(18, 18, 21), line=(35, 35, 41), text=(236, 236, 239),
@@ -717,7 +611,6 @@ FLYOUT_COLORS = {
                             accent_ink=(255, 255, 255), btn=(234, 244, 244)),
 }
 
-
 def flyout_colors():
     cfg = load_settings()
     mode = cfg.get("theme", "auto")
@@ -727,7 +620,6 @@ def flyout_colors():
     palette = cfg.get("palette", "amber")
     return FLYOUT_COLORS.get(("dark" if dark else "light", palette),
                              FLYOUT_COLORS[("dark", "amber")])
-
 
 def _panel_control(device_id, action):
     """原生面板上的按钮：查设备所属 provider 再下发动作。"""
@@ -742,7 +634,6 @@ def _panel_control(device_id, action):
         collect_devices(force=True)
     except Exception:
         log("面板控制异常: " + traceback.format_exc())
-
 
 def show_flyout(mode="panel"):
     """托盘左键：原生面板（不走浏览器）。再点一次收起。"""
@@ -765,7 +656,6 @@ def show_flyout(mode="panel"):
     finally:
         _flyout_open = False
 
-
 def handle_ui_requests():
     """页面按钮发过来的请求：打开主面板 / 关闭小面板。"""
     if UI_REQUESTS["panel"] > _handled["panel"]:
@@ -773,17 +663,13 @@ def handle_ui_requests():
         close_flyout()
         _ui_queue.put(lambda: open_panel(PORT_HOLDER["port"]))
 
-
 def close_panel():
     """退出时关掉我们开的面板窗口，别留一个连不上后端的空壳。"""
     for hwnd in panel_windows():
         try:
-            user32.PostMessageW(hwnd, 0x0010, 0, 0)     # WM_CLOSE
+            user32.PostMessageW(hwnd, 0x0010, 0, 0)               
         except Exception:
             pass
-
-
-# ---------------------------------------------------------------- 生命周期
 
 def quit_app(icon=None, item=None):
     _stop.set()
@@ -796,14 +682,11 @@ def quit_app(icon=None, item=None):
     log(f"{APP_NAME} 退出")
     os._exit(0)
 
-
 def on_open(icon=None, item=None):
     _ui_queue.put(lambda: open_panel(PORT_HOLDER["port"]))
 
-
 def on_refresh(icon=None, item=None):
     _ui_queue.put(lambda: update_tray(force=True))
-
 
 def pump():
     """主循环里执行队列中的动作（托盘回调在自己的线程）。"""
@@ -819,15 +702,9 @@ def pump():
         except Exception:
             log("托盘动作异常: " + traceback.format_exc())
 
-
-_panel_used = False          # 原生面板是否被用过（用过就不该因为"没心跳"退出）
-
+_panel_used = False                                     
 
 def idle_watchdog():
-    """没有托盘时，用页面心跳判断面板是否还开着。
-
-    注意：原生面板不产生心跳，所以只要用户点开过面板，就不再按心跳收进程。
-    """
     started = time.time()
     while not _stop.is_set():
         if _panel_used:
@@ -844,36 +721,51 @@ def idle_watchdog():
         _stop.wait(5)
     quit_app()
 
-
 PORT_HOLDER = {"port": PORT}
-
-
-# ---------------------------------------------------------------- 单实例
 
 def acquire_single_instance():
     kernel32.CreateMutexW.restype = ctypes.c_void_p
     kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, w.BOOL, w.LPCWSTR]
     ctypes.set_last_error(0)
     handle = kernel32.CreateMutexW(None, True, "Local\\HIDCircus.SingleInstance")
-    already = ctypes.get_last_error() == 183        # ERROR_ALREADY_EXISTS
+    already = ctypes.get_last_error() == 183                              
     return handle, not already
 
-
-def find_running_port():
+def find_running_instance():
+    """返回 (port, status_json) 或 (None, None)。"""
     for port in range(PORT, PORT + PORT_TRIES):
         try:
             with urllib.request.urlopen(
                     f"http://{HOST}:{port}/api/status", timeout=0.4) as resp:
                 data = json.loads(resp.read())
-                # 只认自己的服务：/api/status 里一定有 port 和 log 两个字段
                 if isinstance(data, dict) and "port" in data and "log" in data:
-                    return port
+                    return port, data
         except Exception:
             continue
+    return None, None
+
+def pid_by_port(port):
+    try:
+        out = subprocess.run(["netstat", "-ano"], capture_output=True, text=True,
+                             timeout=10, encoding="utf-8", errors="ignore",
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        for line in out.splitlines():
+            if f":{port} " in line and "LISTENING" in line.upper():
+                return int(line.split()[-1])
+    except Exception:
+        pass
     return None
 
 
-# ---------------------------------------------------------------- 入口
+def kill_pid(pid):
+    try:
+        subprocess.run(["taskkill", "/F", "/PID", str(int(pid))],
+                       capture_output=True, timeout=10,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return True
+    except Exception:
+        log(f"结束旧实例 {pid} 失败: " + traceback.format_exc())
+        return False
 
 def main():
     global _icon, _low_integrity
@@ -889,14 +781,11 @@ def main():
     sys.excepthook = _hook
     threading.excepthook = _thread_hook
 
-    # 先判定自己的权限级别：低权限下托盘和浏览器窗口都不可能工作，
-    # 后面的逻辑据此少走弯路（包括"已有实例"这条早退路径）
     level = current_integrity()
     log(f"进程完整性: {INTEGRITY_LEVELS.get(level, hex(level) if level else '未知')}")
     if level is not None and level < 0x2000:
         _low_integrity = True
-        # 低权限下托盘/窗口都不可能工作。与其弹对话框，不如自动提权一次（UAC），
-        # 带上 --elevated 标记防止无限递归。
+
         log("检测到低权限，尝试提权重启（会弹一次 UAC）")
         if "--elevated" not in sys.argv and _relaunch_elevated():
             log("已交给提权实例，当前进程退出")
@@ -905,21 +794,29 @@ def main():
 
     log(f"{APP_NAME} 启动")
 
-    # 单实例：重复双击时只开面板，不再起第二套服务。
-    # 两个检查都要做——不同完整性级别的进程看不到对方的互斥体（打开会失败），
-    # 但端口探测是通用的，能兜住"管理员实例 + 普通实例同时跑"的情况。
     _mutex, first = acquire_single_instance()
-    running = find_running_port()
+    running, running_status = find_running_instance()
     if running:
-        log(f"已有实例在运行（端口 {running}），叫它把面板弹出来")
-        try:
-            req = urllib.request.Request(
-                f"http://{HOST}:{running}/api/show", data=b"{}", method="POST")
-            req.add_header("Content-Type", "application/json")
-            urllib.request.urlopen(req, timeout=3).read()
-        except Exception:
-            log("提醒运行中实例失败: " + traceback.format_exc())
-        return
+        running_version = (running_status or {}).get("version", "未知")
+        if running_version != VERSION:
+            old_pid = (running_status or {}).get("pid") or pid_by_port(running)
+            log(f"端口 {running} 上是旧版本 {running_version}（当前 {VERSION}），准备接管")
+            if old_pid and kill_pid(old_pid):
+                log("旧实例已结束，继续启动新版本")
+                time.sleep(1.5)
+                running = None
+            else:
+                log("无法结束旧实例（权限不足），请手动在任务管理器结束 HIDCircus")
+        if running:
+            log(f"已有实例在运行（端口 {running}），叫它把面板弹出来")
+            try:
+                req = urllib.request.Request(
+                    f"http://{HOST}:{running}/api/show", data=b"{}", method="POST")
+                req.add_header("Content-Type", "application/json")
+                urllib.request.urlopen(req, timeout=3).read()
+            except Exception:
+                log("提醒运行中实例失败: " + traceback.format_exc())
+            return
     if not first:
         log("检测到实例标记但找不到服务，继续启动")
     try:
@@ -945,7 +842,6 @@ def main():
     log(f"父进程: {parent_process()}")
     log(f"父进程权限: {INTEGRITY_LEVELS.get(current_integrity(os.getppid()), '读不到')}")
 
-    # 托盘
     tray_ok = False
     try:
         _icon = Tray(make_icon(None), APP_NAME,
@@ -967,9 +863,6 @@ def main():
     STATUS["tray"] = tray_ok
     log("托盘已就绪" if tray_ok else "托盘不可用，退化为只看窗口")
 
-    # 启动一律不打开浏览器：浏览器面板只在用户点「主面板」时才出现。
-    # --panel  → 启动后弹出原生面板（桌面快捷方式用）
-    # --silent → 完全静默，只驻留托盘（开机自启用）
     if "--panel" in sys.argv:
         threading.Timer(1.2, lambda: show_flyout("panel")).start()
     else:
@@ -984,7 +877,6 @@ def main():
 
     while not _stop.is_set():
         time.sleep(0.4)
-
 
 if __name__ == "__main__":
     main()

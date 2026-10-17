@@ -12,7 +12,6 @@ from providers.extension import SPEC_VERSION, load_extensions, validate
 
 EXAMPLES = ROOT / "extensions" / "examples"
 
-
 def test_示例全部通过校验():
     exts, errors = load_extensions(EXAMPLES)
     assert not errors, f"示例有问题: {errors}"
@@ -20,7 +19,6 @@ def test_示例全部通过校验():
     ids = {e.id for e in exts}
     assert "asus-rog-pelta" in ids
     assert "razer-viper-v3-pro" in ids
-
 
 def test_匹配规则按vid和pid():
     exts, _ = load_extensions(EXAMPLES)
@@ -32,7 +30,6 @@ def test_匹配规则按vid和pid():
     assert not asus.matches({"vendor_id": 0x046D, "product_id": 0x1B84,
                             "usage_page": 0xFF00})
 
-
 def test_usage_page不匹配就跳过():
     exts, _ = load_extensions(EXAMPLES)
     razer = next(e for e in exts if e.id == "razer-viper-v3-pro")
@@ -41,12 +38,10 @@ def test_usage_page不匹配就跳过():
     assert not razer.matches({"vendor_id": 0x1532, "product_id": 0x00C1,
                               "usage_page": 0x000C})
 
-
 def test_缺字段报错带文件名():
     bad = {"spec": SPEC_VERSION, "name": "缺 id"}
     errors = validate(bad)
     assert any("id" in e for e in errors)
-
 
 def test_json语法错不炸整个加载():
     with tempfile.TemporaryDirectory() as tmp:
@@ -63,7 +58,6 @@ def test_json语法错不炸整个加载():
         assert len(exts) == 1
         assert any("broken.json" in e for e in errors)
 
-
 def test_重复id会被拒绝():
     with tempfile.TemporaryDirectory() as tmp:
         for name in ("a.json", "b.json"):
@@ -76,7 +70,6 @@ def test_重复id会被拒绝():
         exts, errors = load_extensions(tmp)
         assert len(exts) == 1
         assert any("重复" in e for e in errors)
-
 
 def main():
     tests = [(k, v) for k, v in sorted(globals().items())
@@ -91,7 +84,6 @@ def main():
             print(f"  FAIL {name}: {e}")
     print(f"\n{len(tests) - failed}/{len(tests)} 通过")
     return 1 if failed else 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

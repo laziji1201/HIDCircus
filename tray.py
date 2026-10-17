@@ -1,17 +1,3 @@
-"""Win32 托盘图标（Shell_NotifyIcon），不依赖 pystray。
-
-为什么自己写：pystray 的 win32 后端在创建消息窗口后调 `ChangeWindowMessageFilterEx`，
-在这台机器上稳定返回 `WinError 5 拒绝访问`（对消息窗口调用本身就不被支持），
-导致托盘永远建不起来。Shell_NotifyIcon 是系统托盘的原生接口，不存在这个前置调用。
-
-用法：
-    tray = Tray(icon_image, "HIDCircus", [("打开面板", cb), ("退出", cb2)], on_click=cb)
-    tray.start()          # 起消息循环
-    tray.update(image, "HIDCircus — 54%")
-    tray.stop()
-
-图标更新可以从任意线程调用（内部有锁）。
-"""
 
 import ctypes
 import threading
@@ -42,11 +28,9 @@ CS_VREDRAW, CS_HREDRAW = 0x0001, 0x0002
 WM_CLASS_NAME = "HIDCircusTrayWnd"
 ICON_ID = 1
 
-
 class GUID(ctypes.Structure):
     _fields_ = [("Data1", w.DWORD), ("Data2", w.WORD), ("Data3", w.WORD),
                 ("Data4", ctypes.c_ubyte * 8)]
-
 
 class NOTIFYICONDATAW(ctypes.Structure):
     _fields_ = [
@@ -67,11 +51,9 @@ class NOTIFYICONDATAW(ctypes.Structure):
         ("hBalloonIcon", w.HICON),
     ]
 
-
 class ICONINFO(ctypes.Structure):
     _fields_ = [("fIcon", w.BOOL), ("xHotspot", w.DWORD), ("yHotspot", w.DWORD),
                 ("hbmMask", w.HBITMAP), ("hbmColor", w.HBITMAP)]
-
 
 class BITMAPINFOHEADER(ctypes.Structure):
     _fields_ = [("biSize", w.DWORD), ("biWidth", w.LONG), ("biHeight", w.LONG),
@@ -80,10 +62,8 @@ class BITMAPINFOHEADER(ctypes.Structure):
                 ("biXPelsPerMeter", w.LONG), ("biYPelsPerMeter", w.LONG),
                 ("biClrUsed", w.DWORD), ("biClrImportant", w.DWORD)]
 
-
 class BITMAPINFO(ctypes.Structure):
     _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", w.DWORD * 3)]
-
 
 class WNDCLASSW(ctypes.Structure):
     _fields_ = [("style", w.UINT), ("lpfnWndProc", ctypes.c_void_p),
@@ -91,7 +71,6 @@ class WNDCLASSW(ctypes.Structure):
                 ("hInstance", w.HINSTANCE), ("hIcon", w.HICON),
                 ("hCursor", w.HANDLE), ("hbrBackground", w.HBRUSH),
                 ("lpszMenuName", w.LPCWSTR), ("lpszClassName", w.LPCWSTR)]
-
 
 WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, w.HWND, w.UINT, w.WPARAM, w.LPARAM)
 
@@ -142,7 +121,6 @@ gdi32.DeleteObject.argtypes = [w.HGDIOBJ]
 kernel32.GetModuleHandleW.restype = w.HINSTANCE
 kernel32.GetModuleHandleW.argtypes = [w.LPCWSTR]
 
-
 def _hicon(image):
     """PIL 图像 -> HICON（32 位带 alpha，系统托盘才不糊）。"""
     img = image.convert("RGBA")
@@ -152,7 +130,7 @@ def _hicon(image):
     bi = BITMAPINFO()
     bi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
     bi.bmiHeader.biWidth = width
-    bi.bmiHeader.biHeight = -height          # 负数 = 自上而下
+    bi.bmiHeader.biHeight = -height                     
     bi.bmiHeader.biPlanes = 1
     bi.bmiHeader.biBitCount = 32
     bi.bmiHeader.biCompression = 0
@@ -175,14 +153,13 @@ def _hicon(image):
     gdi32.DeleteObject(mask)
     return hicon
 
-
 class Tray:
     """一个最小的系统托盘。start() 之后消息循环跑在自己的线程里。"""
 
     def __init__(self, image, title, items, on_click=None):
         self._image = image
         self._title = title
-        self._items = list(items)          # [(label, callback)]
+        self._items = list(items)                               
         self._on_click = on_click
         self._hwnd = None
         self._hicon = None
@@ -192,8 +169,6 @@ class Tray:
         self._taskbar_created = 0
         self._thread = None
         self.ok = False
-
-    # ---- 对外 ----
 
     def start(self, timeout=4.0):
         self._thread = threading.Thread(target=self._run, name="tray", daemon=True)
@@ -213,8 +188,6 @@ class Tray:
     def stop(self):
         if self._hwnd:
             user32.PostMessageW(self._hwnd, WM_DESTROY, 0, 0)
-
-    # ---- 内部 ----
 
     def _nid(self):
         nid = NOTIFYICONDATAW()
@@ -259,7 +232,7 @@ class Tray:
                 user32.AppendMenuW(menu, MF_STRING, idx, label)
             pt = w.POINT()
             user32.GetCursorPos(ctypes.byref(pt))
-            # 先把窗口设成前台，菜单才会在点击别处时收起
+
             user32.SetForegroundWindow(self._hwnd)
             cmd = user32.TrackPopupMenu(
                 menu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
@@ -303,7 +276,7 @@ class Tray:
             user32.PostQuitMessage(0)
             return 0
         if msg == self._taskbar_created and self._taskbar_created:
-            # 资源管理器重启后要把图标加回去
+
             self._add_icon()
             return 0
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)

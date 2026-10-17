@@ -1,4 +1,3 @@
-/* HIDCircus 前端逻辑：状态、渲染、设置持久化。无构建步骤，直接跑。 */
 (() => {
   "use strict";
 
@@ -26,7 +25,6 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-  /* 出错时不要白屏：把错误怼到页面上，省得只能靠日志猜 */
   function showFatal(msg) {
     let box = document.getElementById("fatalBox");
     if (!box) {
@@ -42,8 +40,6 @@
     const r = e.reason;
     showFatal("Promise: " + (r && (r.stack || r.message) || r));
   });
-
-  /* ---------------- 小工具 ---------------- */
 
   function t(key, vars) {
     const lang = (state.settings && state.settings.language) || "zh";
@@ -77,10 +73,6 @@
   function rgbToHex(rgb) {
     return "#" + (rgb || [0, 0, 0]).map((n) => pad2(Math.max(0, Math.min(255, n)).toString(16))).join("");
   }
-
-  /* ---------------- 接口 ----------------
-     写入类接口要求带 token：它是服务端启动时生成的，
-     只有这个页面能拿到（注入在 HTML 里），别的本机程序调不动。 */
 
   const TOKEN = window.__TOKEN__ || "";
 
@@ -150,8 +142,6 @@
     return out;
   }
 
-  /* ---------------- 主题 / 语言 / 背景 ---------------- */
-
   function prefersDark() {
     return window.matchMedia("(prefers-color-scheme: dark)").matches;
   }
@@ -202,8 +192,6 @@
     }
   }
 
-  /* ---------------- 页面头 / 导航 ---------------- */
-
   function renderPageHead() {
     const isSettings = state.page === "settings";
     const title = $("#pageTitle");
@@ -229,7 +217,6 @@
   const BOOT_AT = performance.now();
 
   function hideLoader() {
-    // 数据到得太快的话加载页会一闪而过，反而显得闪屏；至少留 650ms
     const wait = Math.max(0, 650 - (performance.now() - BOOT_AT));
     setTimeout(() => {
       const el = $("#loader");
@@ -251,8 +238,6 @@
     else if (kind === "failed") em.textContent = t("sync.failed");
     else em.textContent = t("sync.idle");
   }
-
-  /* ---------------- 设备渲染 ---------------- */
 
   function renderSkeleton() {
     const grid = $("#deviceGrid");
@@ -295,7 +280,6 @@
     const mode = Number(light.mode) || 2;
     const bright = Number(light.brightness) || 0;
     const color = rgbToHex(light.color);
-    // 控件永远可改：灯效关着也能预设模式和颜色，按"应用"会顺手点亮
     return `
       <div class="ctl">
         <div class="ctl-head">
@@ -326,7 +310,6 @@
       </div>`;
   }
 
-  /* 扩展声明的通用控件：按钮组（灯效开关之类）+ 数值输入（DPI 之类） */
   function extensionControlsHTML(d) {
     const info = (d.extra || {}).extension;
     const controls = (info && info.controls) || [];
@@ -451,7 +434,6 @@
     const body = controls ||
       `<div class="ctl-empty">${esc(t("ctl.none"))}</div>`;
 
-    // 环形进度只占一小块，腾出来的垂直空间给下面的设置项
     const facts = [];
     if (extra.dpi) facts.push(`DPI  X ${Number(extra.dpi.x) || "—"} · Y ${Number(extra.dpi.y) || "—"}`);
     if (extra.poll_rate) facts.push(`${extra.poll_rate} Hz`);
@@ -513,8 +495,6 @@
       ? `${list.length}<b>${esc(t("stat.unit"))}</b>`
       : `${list.length}<b>${esc(t("stat.unit"))}</b>· ${esc(t("stat.low"))}<b>${low}%</b>`;
   }
-
-  /* ---------------- 设置页状态 ---------------- */
 
   function renderSettingsState() {
     const s = state.settings || {};
@@ -614,7 +594,6 @@
     const data = await api("/api/extensions").catch(() => null);
     if (!data) { box.innerHTML = ""; return; }
 
-    // 顶部状态：内置几家、加载了几个扩展、有没有错误
     const status = $("#extStatus");
     if (status) {
       const vendors = Array.from(new Set((state.devices || [])
@@ -669,7 +648,6 @@
   function renderPalettes(active) {
     const box = $("#paletteSeg");
     if (!box) return;
-    // 文案跟着语言走：语言变了就重建按钮；点击事件只绑一次，避免重复累积
     const lang = (state.settings && state.settings.language) || "zh";
     if (box.dataset.built !== lang) {
       box.innerHTML = PALETTES.map((p) => `
@@ -692,8 +670,6 @@
     Array.from(box.querySelectorAll("button[data-value]")).forEach((b) =>
       b.classList.toggle("is-active", b.dataset.value === active));
   }
-
-  /* ---------------- 配置备份 ---------------- */
 
   const PORTABLE_KEYS = ["theme", "language", "palette", "motion", "bg_dim",
                          "bg_blur", "refresh_seconds", "device_order", "aliases"];
@@ -745,8 +721,6 @@
     }
   }
 
-  /* ---------------- 设备别名 ---------------- */
-
   async function renameDevice(id, current) {
     const name = window.prompt(t("alias.prompt"), current || "");
     if (name === null) return;
@@ -767,8 +741,6 @@
     }
   }
 
-  /* ---------------- 提示 ---------------- */
-
   function toast(message, kind) {
     const box = $("#toasts");
     const el = document.createElement("div");
@@ -782,8 +754,6 @@
       setTimeout(() => el.remove(), 220);
     }, 2600);
   }
-
-  /* ---------------- 拖拽排序（长按 320ms 进入） ---------------- */
 
   const drag = { active: false, card: null, ph: null, offX: 0, offY: 0,
                  timer: null, sx: 0, sy: 0 };
@@ -833,7 +803,6 @@
     card.style.left = `${x - drag.offX}px`;
     card.style.top = `${y - drag.offY}px`;
 
-    // 找离指针最近的槽位，把占位块挪过去
     let best = null;
     let bestDist = Infinity;
     for (const el of $("#deviceGrid").children) {
@@ -868,7 +837,6 @@
     }
     toast(t("toast.orderSaved"), "ok");
   }
-  /* ---------------- 事件 ---------------- */
 
   function wire() {
     const grid = $("#deviceGrid");
@@ -930,7 +898,6 @@
       }
     });
 
-    // 扩展控件：按钮 + 数值输入
     $("#deviceGrid").addEventListener("click", async (e) => {
       const btn = e.target.closest(".ext-btn");
       if (btn) {
@@ -953,7 +920,6 @@
       }
     });
 
-    // 双击设备名 = 改别名（留空恢复原厂名）
     $("#deviceGrid").addEventListener("dblclick", (e) => {
       const el = e.target.closest("[data-alias]");
       if (!el) return;
@@ -1027,7 +993,6 @@
     });
     blur.addEventListener("change", () => saveSettings({ bg_blur: Number(blur.value) }));
 
-    // 长按卡片进入拖拽排序
     grid.addEventListener("pointerdown", (e) => {
       if (e.button !== 0 || drag.active) return;
       if (e.target.closest("input, button, select, textarea, a, label")) return;
@@ -1053,7 +1018,6 @@
 
     window.addEventListener("pointerup", () => { endDrag(); });
     window.addEventListener("pointercancel", () => { endDrag(); });
-    // 卡片内控件
     grid.addEventListener("input", (e) => {
       const el = e.target;
       if (el.matches('input[type="range"][data-f="brightness"]')) {
@@ -1074,7 +1038,6 @@
       if (btn.dataset.act === "lighting") {
         const color = hexToRgb(get("color").value);
         const toggle = card.querySelector('[data-act="lighting-toggle"]');
-        // 灯效关着的时候改模式/颜色，顺手点亮，否则用户看不到效果
         if (toggle && toggle.dataset.on !== "1") {
           await control(vendor, id, "lighting_on", {});
         }
@@ -1113,10 +1076,6 @@
     }, Math.max(3, seconds) * 1000);
   }
 
-  /* ---------------- 心跳 ----------------
-     桌面端靠它判断"面板还开着"，没有托盘时决定进程要不要退出。
-     任何浏览器、有无边框都不影响。 */
-
   function startHeartbeat() {
     const ping = () => {
       fetch("/api/ping", { method: "POST", keepalive: true }).catch(() => {});
@@ -1127,8 +1086,6 @@
       if (document.visibilityState === "visible") ping();
     });
   }
-
-  /* ---------------- 启动 ---------------- */
 
   async function boot() {
     try {
@@ -1171,8 +1128,6 @@
     startTimer();
   }
 
-  /* 兜底：只要脚本抛错，也要把加载遮罩收掉并显示错误条，
-     否则用户看到的就是一整块"黢黑"的窗口（曾经发生过）。 */
   function failSafe(err) {
     try {
       hideLoader();

@@ -1,12 +1,3 @@
-"""原生托盘小面板：GDI 自绘，不依赖浏览器窗口。
-
-为什么不用网页做：用 Edge --app 开的小窗口本质还是"一个小窗口的浏览器"——
-启动慢、会和应用窗口抢配置目录、遇到"管理员实例"还会弹权限对话框。
-这个面板只显示几行电量，用 GDI 直接画既轻又快（几十毫秒），也不会有任何浏览器副作用。
-
-外观：圆角卡片 + 一行一台设备（厂商色圆点 / 名称 / 状态 / 百分比）+ 底部两个按钮。
-行为：左键托盘弹出在光标上方；失去焦点或按 ESC 自动收起；打开期间每 5 秒自动刷新。
-"""
 
 import ctypes
 import threading
@@ -105,10 +96,8 @@ CLASS_NAME = "HIDCircusFlyout"
 VENDOR_HUE = {"asus": (0x5A, 0x5A, 0xFF), "logitech": (0xFF, 0xB8, 0x5A),
               "razer": (0x7C, 0xE3, 0x8B)}
 
-
 def _rgb(r, g, b):
     return (r & 0xFF) | ((g & 0xFF) << 8) | ((b & 0xFF) << 16)
-
 
 class Flyout:
     """一个自绘的小弹窗。show() 之后阻塞在消息循环里，关闭后返回。"""
@@ -118,7 +107,6 @@ class Flyout:
     HEAD_H = 56
     FOOT_H = 46
 
-    # panel 模式用的大尺寸
     PANEL_WIDTH = 392
     PANEL_ROW_H = 52
     PANEL_HEAD_H = 54
@@ -127,28 +115,24 @@ class Flyout:
     def __init__(self, devices_fn, on_open_panel, on_refresh, colors,
                  mode="flyout", on_control=None):
         self.mode = mode
-        self._on_control = on_control       # (device_id, action) -> None
+        self._on_control = on_control                                    
         self._devices_fn = devices_fn
         self._on_open_panel = on_open_panel
         self._on_refresh = on_refresh
         self._colors = colors
         self._hwnd = None
-        self._rows = []          # [(x1,y1,x2,y2, btn_id)]
+        self._rows = []                                   
         self._hover = None
         self._proc = WNDPROC(self._wndproc)
         self._class_atom = None
         self._scale = 1.0
         self._refresh_rows()
 
-    # ---------- 数据 ----------
-
     def _refresh_rows(self):
         try:
             self._devices = self._devices_fn()
         except Exception:
             self._devices = []
-
-    # ---------- 窗口 ----------
 
     def _register(self):
         if self._class_atom:
@@ -242,16 +226,12 @@ class Flyout:
         user32.GetCursorPos(ctypes.byref(pt))
         return pt.x, pt.y
 
-    # ---------- 绘制 ----------
-
     def _wndproc(self, hwnd, msg, wparam, lparam):
         if msg == WM_PAINT:
             self._paint(hwnd)
             return 0
         if msg == WM_TIMER:
-            # 收起时机：先给 1.2 秒宽限（SetForegroundWindow 可能被系统拒绝），
-            # 之后只要曾经拿到过焦点、而现在焦点不在我们身上，就收起来；
-            # 如果一直没拿到焦点（被拒绝），就在面板外侧按下鼠标或超过 10 秒时收起。
+
             self._ticks = getattr(self, "_ticks", 0) + 1
             if self._ticks % 12 == 0:
                 self._refresh_rows()
@@ -265,7 +245,7 @@ class Flyout:
             if getattr(self, "_had_focus", False):
                 user32.DestroyWindow(hwnd)
                 return 0
-            if self._ticks > 25:                      # 约 10 秒还没拿到焦点
+            if self._ticks > 25:                                    
                 user32.DestroyWindow(hwnd)
                 return 0
             if (user32.GetAsyncKeyState(0x01) & 0x8000) and not self._inside_cursor(hwnd):
@@ -339,7 +319,7 @@ class Flyout:
         if self.mode == "panel":
             self._paint_panel(hwnd)
             return
-        ps = ctypes.create_string_buffer(64)          # PAINTSTRUCT
+        ps = ctypes.create_string_buffer(64)                       
         hdc = user32.BeginPaint(hwnd, ps)
         try:
             scale = self._dpi_scale(hwnd)
@@ -356,7 +336,6 @@ class Flyout:
 
             gdi32.SetBkMode(hdc, TRANSPARENT)
 
-            # 标题
             font_title = gdi32.CreateFontW(int(-13 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
                                            0, 0, 0, 0, 0, "Microsoft YaHei UI")
             gdi32.SelectObject(hdc, font_title)
@@ -371,7 +350,6 @@ class Flyout:
             self._text(hdc, "电量一览", int(16 * scale), int(31 * scale),
                        width - int(32 * scale), int(16 * scale), DT_LEFT)
 
-            # 设备行
             font_row = gdi32.CreateFontW(int(-13 * scale), 0, 0, 0, 400, 0, 0, 0,
                                          0, 0, 0, 0, 0, "Microsoft YaHei UI")
             font_pct = gdi32.CreateFontW(int(-13 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
@@ -407,14 +385,12 @@ class Flyout:
                            row_h, DT_RIGHT | DT_VCENTER)
                 y += row_h
 
-            # 分隔线
             pen2 = gdi32.CreatePen(PS_SOLID, 1, _rgb(*c["line"]))
             gdi32.SelectObject(hdc, pen2)
             ly = height - int(self.FOOT_H * scale)
             gdi32.MoveToEx(hdc, int(16 * scale), ly, None)
             gdi32.LineTo(hdc, width - int(16 * scale), ly)
 
-            # 底部按钮
             btn_h = int(26 * scale)
             by = ly + int(10 * scale)
             half = (width - int(44 * scale)) // 2
@@ -443,8 +419,6 @@ class Flyout:
             gdi32.DeleteObject(bg)
         finally:
             user32.EndPaint(hwnd, ps)
-
-    # ---------------- panel 模式 ----------------
 
     def _paint_panel(self, hwnd):
         ps = ctypes.create_string_buffer(64)
@@ -484,7 +458,6 @@ class Flyout:
             self._text(hdc, "外设控制台", int(16 * scale), int(30 * scale),
                        width - int(120 * scale), int(16 * scale), DT_LEFT)
 
-            # 右上角：刷新按钮
             refresh = (width - int(72 * scale), int(10 * scale),
                        width - int(14 * scale), int(34 * scale))
             self._rows = [(*refresh, "refresh")]
@@ -558,7 +531,6 @@ class Flyout:
 
                 y += row_h + (int(26 * scale) if (extra.get("lighting")) else 0)
 
-            # 底部：打开网页版 / 关闭
             ly = height - int(self.PANEL_FOOT_H * scale)
             pen2 = gdi32.CreatePen(PS_SOLID, 1, _rgb(*c["line"]))
             gdi32.SelectObject(hdc, pen2)
@@ -598,9 +570,8 @@ class Flyout:
         buf = ctypes.create_unicode_buffer(text)
         rect = w.RECT(x, y, x + cx, y + cy)
         if center:
-            flags = DT_SINGLELINE | DT_VCENTER | 0x0001      # DT_CENTER
+            flags = DT_SINGLELINE | DT_VCENTER | 0x0001                 
         user32.DrawTextW(hdc, buf, len(text), ctypes.byref(rect), flags | DT_NOPREFIX)
-
 
 gdi32.MoveToEx.argtypes = [w.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
 gdi32.LineTo.argtypes = [w.HDC, ctypes.c_int, ctypes.c_int]
