@@ -1,45 +1,47 @@
 """HIDCircus 桌面入口。
 
-形态：托盘常驻 + tkinter 原生主窗口。
-- 托盘图标实时显示当前最低电量
-- 左键点托盘 -> 打开主面板
-- 右键菜单 -> 打开面板 / 刷新 / 退出
-- 关闭窗口时隐藏而非退出，托盘继续常驻
-- 若当前环境不允许托盘，则直接显示主窗口、关闭即退出
+窗口用 Edge 的 --app 模式：没有地址栏和标签页，本质就是一个独立窗口，
+但前端是完整 Chromium 渲染（CSS 全部可用），且和浏览器面板共用同一套页面。
+不用内嵌 WebView（pywebview 在 .NET Framework 下加载失败，coreclr 又缺 WinForms）。
 
-线程模型：Tk 只能在主线程操作。托盘回调跑在 pystray 自己的线程里，
-所以它们只往队列里塞一个函数，由主线程的 _pump 取出执行。
+结构：
+  本地 HTTP 服务（线程） + Edge 应用窗口（子进程） + 托盘（pystray）
+  关闭窗口不会退出程序，托盘还在；托盘退出才真正结束。
+  托盘不可用时退化为「窗口关了就把进程也收掉」，避免留后台孤儿进程。
 """
 
+import ctypes
+import os
 import queue
+import shutil
+import subprocess
 import sys
 import threading
 import time
 import traceback
+from ctypes import wintypes as w
 from pathlib import Path
 
 import pystray
 from PIL import Image, ImageDraw, ImageFont
-import tkinter as tk
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from server import create_server, collect_devices, HOST
-from ui import HIDCircusUI
+from server import create_server, collect_devices, load_settings, HOST
 
 APP_NAME = "HIDCircus"
-POLL_INTERVAL = 30
+TRAY_POLL = 30
 FONT_PATH = r"C:\Windows\Fonts\arialbd.ttf"
 
-_root = None
-_icon = None
-_ui = None
+_root_icon = None
+_stop = threading.Event()
 _ui_queue = queue.Queue()
 
 
+# ---------- 日志 ----------
+
 def log_dir():
-    """打包后 _MEIPASS 是临时目录，日志要落在 exe 旁边。"""
     base = (Path(sys.executable).resolve().parent
             if getattr(sys, "frozen", False) else ROOT)
     d = base / "logs"
@@ -62,17 +64,17 @@ def log(msg):
         pass
 
 
+# ---------- 托盘图标 ----------
 
 def make_icon(battery):
-    """托盘图标：圆环 + 电量数字，按低电量变色"""
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     if battery is None:
-        color, text = (139, 147, 167), "--"
+        color, text = (154, 154, 164), "--"
     else:
         color = (61, 220, 132) if battery > 50 else (
-            (255, 176, 32) if battery > 20 else (255, 92, 92))
+            (251, 191, 36) if battery > 20 else (248, 113, 113))
         text = str(battery)
     d.ellipse((3, 3, size - 3, size - 3), outline=color, width=5)
     try:
@@ -87,81 +89,253 @@ def make_icon(battery):
 
 
 def update_tray(force=False):
-    """按当前电量刷新托盘图标与提示"""
-    if _icon is None:
+    if _root_icon is None:
         return None
     values = [d["battery"] for d in collect_devices(force=force)
               if d.get("battery") is not None]
     low = min(values) if values else None
-    _icon.icon = make_icon(low)
-    _icon.title = (f"{APP_NAME} — {low}%" if low is not None
-                   else f"{APP_NAME} — 无设备")
+    _root_icon.icon = make_icon(low)
+    _root_icon.title = (f"{APP_NAME} — {low}%" if low is not None
+                        else f"{APP_NAME} — 无设备")
     return low
 
 
-def poll(interval=POLL_INTERVAL):
-    """后台轮询电量，刷新托盘图标"""
-    while True:
+def poll_loop():
+    while not _stop.is_set():
         try:
             update_tray()
         except Exception:
-            pass
-        time.sleep(interval)
+            log("托盘刷新异常: " + traceback.format_exc())
+        _stop.wait(TRAY_POLL)
 
 
-def show_window():
-    if _root is None:
+# ---------- 窗口 ----------
+
+def find_edge():
+    candidates = [
+        shutil.which("msedge"),
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    for c in candidates:
+        if c and Path(c).is_file():
+            return c
+    return None
+
+
+def windows_with_title(needle):
+    """返回标题包含 needle 的可见顶层窗口句柄列表。"""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    handles = []
+
+    @ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
+    def _cb(hwnd, lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        if needle.lower() in buf.value.lower():
+            handles.append(hwnd)
+        return True
+
+    user32.EnumWindows(_cb, 0)
+    return handles
+
+
+def kill_stale_browsers(profile: Path):
+    """杀掉上次残留、还在用我们这个配置目录的 Edge 实例。
+
+    窗口被关掉/进程被强杀后，Edge 可能留着一个后台浏览器进程；这时再启动会直接
+    交给那个旧实例（它可能已经处在崩溃状态），新窗口就永远停在"已崩溃"。
+    只按配置目录精确匹配，不碰用户自己的浏览器。
+    """
+    if sys.platform != "win32":
         return
-    _root.deiconify()
-    _root.lift()
-    _root.attributes("-topmost", True)
-    _root.after(300, lambda: _root.attributes("-topmost", False))
-
-
-def hide_window():
-    if _root is not None:
-        _root.withdraw()
-
-
-def _pump():
-    """主线程定时取出托盘线程投递的动作并执行"""
+    script = (
+        "Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\" | "
+        f"Where-Object {{ $_.CommandLine -like '*{profile}*' }} | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    )
     try:
-        while True:
-            _ui_queue.get_nowait()()
-    except queue.Empty:
-        pass
+        subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                       capture_output=True, timeout=15,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        log("已清理残留的旧浏览器实例")
     except Exception:
-        pass
-    if _root is not None:
-        _root.after(100, _pump)
+        log("清理旧实例失败（忽略）")
 
 
-def on_tray_open(icon=None, item=None):
-    _ui_queue.put(show_window)
+def clean_profile_state(profile: Path):
+    """清掉 Edge 的会话恢复文件。
+
+    Edge 被强杀后会在配置目录里留下"崩溃会话"，下次用同一份配置启动时会去恢复
+    上次那个已经失效的地址，窗口就卡在错误页上（标题会变成 127.0.0.1）。
+    这些都是可再生成的会话文件，删掉不影响任何设置。
+    """
+    default = profile / "Default"
+    for rel in ("Sessions", "Current Session", "Current Tabs",
+                "Last Session", "Last Tabs"):
+        target = default / rel
+        try:
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+            elif target.exists():
+                target.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
-def on_tray_refresh(icon=None, item=None):
-    def run():
-        update_tray(force=True)
-        if _ui is not None:
-            _ui.refresh()
-    _ui_queue.put(run)
+def _spawn_window(edge, url, profile: Path, wipe=False):
+    """起一次窗口，并等它真的把页面标题加载出来。"""
+    if wipe:
+        shutil.rmtree(profile, ignore_errors=True)
+    profile.mkdir(parents=True, exist_ok=True)
+    kill_stale_browsers(profile)
+    if not wipe:
+        clean_profile_state(profile)
+
+    args = [
+        edge,
+        f"--app={url}",
+        f"--user-data-dir={profile}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-session-crashed-bubble",
+        "--hide-crash-restore-bubble",
+        "--disable-features=Translate,MediaRouter",
+        "--window-size=1180,820",
+        "--window-position=140,90",
+    ]
+    try:
+        subprocess.Popen(args, close_fds=True,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        log("启动窗口失败: " + traceback.format_exc())
+        return False
+
+    # 加载失败时 Edge 的窗口标题就是地址本身，所以只有标题变成 HIDCircus 才算成功
+    deadline = time.time() + 12
+    while time.time() < deadline and not _stop.is_set():
+        if windows_with_title(APP_NAME):
+            return True
+        time.sleep(0.6)
+    return False
+
+
+def open_panel(port):
+    """打开应用窗口。已经开着就把它提到前台。
+
+    先用现有配置目录；起不来就说明这份 Edge 配置坏了（上一次被强杀过），
+    清空重开一次——配置目录是我们自己生成的，删掉没有副作用。
+    """
+    existing = windows_with_title(APP_NAME)
+    if existing:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        for hwnd in existing:
+            user32.ShowWindow(hwnd, 9)          # SW_RESTORE
+            user32.SetForegroundWindow(hwnd)
+        return True
+
+    url = f"http://{HOST}:{port}"
+    edge = find_edge()
+    if not edge:
+        log("没找到 Edge，退回默认浏览器")
+        import webbrowser
+        webbrowser.open(url)
+        return False
+
+    profile = ROOT / ".runtime" / "edge-profile"
+    if _spawn_window(edge, url, profile):
+        log(f"已打开窗口: {url}")
+        return True
+
+    log("窗口未加载出来，清空配置副本重试一次")
+    if _spawn_window(edge, url, profile, wipe=True):
+        log(f"已打开窗口: {url}")
+        return True
+
+    log("窗口仍然打不开，服务继续在跑，可以手动运行 panel.bat")
+    return False
+
+
+def close_panel():
+    """退出时顺手关掉我们开的窗口，别留一个连不上后端的空壳。"""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    for hwnd in windows_with_title(APP_NAME):
+        try:
+            user32.PostMessageW(hwnd, 0x0010, 0, 0)   # WM_CLOSE
+        except Exception:
+            pass
+
+
+def window_watchdog(port):
+    """没有托盘时，窗口一关就把进程收掉。
+
+    Edge 冷启动到页面加载完可能要好几秒，标题也不是一开始就叫 HIDCircus，
+    所以要给足启动宽限，并且连续几次都找不到才算真的关了。
+    """
+    deadline = time.time() + 90
+    while time.time() < deadline and not _stop.is_set():
+        if windows_with_title(APP_NAME):
+            break
+        _stop.wait(2)
+    misses = 0
+    while not _stop.is_set():
+        if windows_with_title(APP_NAME):
+            misses = 0
+        else:
+            misses += 1
+            if misses >= 3:
+                log("窗口已关闭且无托盘，退出")
+                break
+        _stop.wait(2)
+    quit_app()
+
+
+# ---------- 托盘动作 ----------
+
+def on_open(icon=None, item=None):
+    _ui_queue.put(lambda: open_panel(PORT_HOLDER["port"]))
+
+
+def on_refresh(icon=None, item=None):
+    _ui_queue.put(lambda: update_tray(force=True))
 
 
 def quit_app(icon=None, item=None):
-    def run():
-        if _root is not None:
-            _root.destroy()
-
+    _stop.set()
     if icon is not None:
-        icon.stop()
-    _ui_queue.put(run)
+        try:
+            icon.stop()
+        except Exception:
+            pass
+    close_panel()
+    log(f"{APP_NAME} 退出")
+    os._exit(0)
 
+
+PORT_HOLDER = {"port": 8777}
+
+
+def pump():
+    """主循环线程里执行队列里的动作（pystray 回调在它自己的线程）。"""
+    while not _stop.is_set():
+        try:
+            _ui_queue.get(timeout=0.2)()
+        except queue.Empty:
+            pass
+        except Exception:
+            log("托盘动作异常: " + traceback.format_exc())
+
+
+# ---------- 入口 ----------
 
 def main():
-    global _root, _icon, _ui
+    global _root_icon
 
-    # 未捕获异常一律落盘，别让它随 pythonw 一起消失
     def _hook(exc_type, exc, tb):
         log("未捕获异常: " + "".join(traceback.format_exception(exc_type, exc, tb)))
 
@@ -174,55 +348,48 @@ def main():
     threading.excepthook = _thread_hook
     log(f"{APP_NAME} 启动")
 
-    # 本地 API 服务（浏览器也能直接访问）
     try:
         server, port = create_server()
     except OSError as e:
         log(f"HTTP 服务启动失败: {e}")
         raise
+    PORT_HOLDER["port"] = port
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log(f"HTTP 面板: http://{HOST}:{port}")
     print(f"HTTP 面板: http://{HOST}:{port}")
 
-    _root = tk.Tk()
-    _ui = HIDCircusUI(_root, api_url=f"http://{HOST}:{port}")
-    _root.after(100, _pump)
+    threading.Thread(target=pump, daemon=True).start()
 
-    # 托盘（当前环境可能不允许 UI 操作，失败则退化为直接显示窗口）
+    # 托盘
     tray_ok = False
-
     try:
-        _icon = pystray.Icon(
+        _root_icon = pystray.Icon(
             "hidcircus", make_icon(None), APP_NAME,
             menu=pystray.Menu(
-                pystray.MenuItem("打开面板", on_tray_open, default=True),
-                pystray.MenuItem("刷新", on_tray_refresh),
+                pystray.MenuItem("打开面板", on_open, default=True),
+                pystray.MenuItem("刷新电量", on_refresh),
                 pystray.MenuItem("退出", quit_app),
             ),
         )
-        _icon.run_detached()
+        _root_icon.run_detached()
         time.sleep(1.2)
-        # pystray 内部线程抛异常时 _hwnd 可能已赋值，所以还要看日志里有没有线程异常
-        tray_ok = bool(getattr(_icon, "_hwnd", None))
-        if tray_ok:
-            log("托盘已就绪")
-        else:
-            log("托盘未建立（_hwnd 为空），退化为直接显示窗口")
-            _icon = None
-    except Exception as e:
-        log(f"托盘不可用: {e}")
-        _icon = None
+        tray_ok = bool(getattr(_root_icon, "_hwnd", None))
+        log("托盘已就绪" if tray_ok else "托盘未建立（_hwnd 为空）")
+    except Exception:
+        log("托盘不可用: " + traceback.format_exc())
+        _root_icon = None
+        tray_ok = False
+
+    threading.Thread(target=open_panel, args=(port,), daemon=True).start()
 
     if tray_ok:
-        _root.protocol("WM_DELETE_WINDOW", hide_window)
+        threading.Thread(target=poll_loop, daemon=True).start()
     else:
-        _root.protocol("WM_DELETE_WINDOW", quit_app)
+        threading.Thread(target=window_watchdog, args=(port,), daemon=True).start()
 
-    if _icon is not None:
-        threading.Thread(target=poll, daemon=True).start()
-
-    _root.mainloop()
-    log(f"{APP_NAME} 退出")
+    # 主线程只负责等退出
+    while not _stop.is_set():
+        time.sleep(0.4)
 
 
 if __name__ == "__main__":

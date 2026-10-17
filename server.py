@@ -1,9 +1,8 @@
 """HIDCircus —— 多厂商外设统一控制面板（本地服务）。
 
-零云依赖：只在本机 127.0.0.1 起一个 HTTP 服务，供桌面外壳和浏览器共用。
-所有设备通信都走 HID，不需要厂商软件常驻。
+零云依赖：只在本机 127.0.0.1 起一个 HTTP 服务，桌面外壳（WebView2）和浏览器共用同一套页面。
 
-注意并发：托盘线程、主窗口线程、HTTP 请求线程都会调 collect_devices()。
+注意并发：托盘线程、HTTP 请求线程都会调 collect_devices()。
 同一个 HID 设备被两处同时打开会互相抢响应，所以扫描必须串行，并带一层
 短时缓存把同一时刻的多次请求合并成一次真实扫描。
 """
@@ -14,6 +13,7 @@ import threading
 import time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import hid
 
@@ -23,30 +23,65 @@ HOST = "127.0.0.1"
 PORT = 8777
 PORT_TRIES = 8          # 端口被占用时依次往后试
 CACHE_TTL = 2.0         # 秒，这个时间内重复请求复用上一次扫描结果
+MAX_BACKGROUND = 12 * 1024 * 1024   # 背景图上限 12MB
 
 # PyInstaller onefile 会把资源解压到 _MEIPASS
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys._MEIPASS)
+    DATA_DIR = Path(sys.executable).resolve().parent
 else:
     BASE_DIR = Path(__file__).resolve().parent
+    DATA_DIR = BASE_DIR
 WEB_DIR = BASE_DIR / "web"
+CONFIG_PATH = DATA_DIR / "config.json"
+BACKGROUND_DIR = DATA_DIR / "assets" / "background"
 
 PROVIDERS = build_providers(hid)
 
+DEFAULT_SETTINGS = {
+    "theme": "auto",        # auto | dark | light
+    "language": "zh",       # zh | en
+    "background": "",       # 背景图文件名，空字符串表示不使用
+    "bg_dim": 0.55,         # 背景遮罩强度 0–0.95
+    "bg_blur": 0,           # 背景模糊半径 0–24 px
+    "refresh_seconds": 10,  # 自动刷新间隔
+}
+
 _scan_lock = threading.Lock()
 _cache = {"at": 0.0, "devices": []}
+_settings_lock = threading.Lock()
 
 
-class LocalServer(ThreadingHTTPServer):
-    """本地 HTTP 服务。
+# ---------- 配置读写 ----------
 
-    Windows 的 SO_REUSEADDR 语义和 Unix 不同：开着它时第二个进程能抢占同一端口，
-    导致「端口被占用却以为自己绑上了」。所以 Windows 下关掉，让占用能被检测到，
-    交给 create_server() 顺延端口。
-    """
-    daemon_threads = True
-    allow_reuse_address = sys.platform != "win32"
+def load_settings():
+    data = dict(DEFAULT_SETTINGS)
+    try:
+        raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                if k in DEFAULT_SETTINGS:
+                    data[k] = v
+    except (OSError, ValueError):
+        pass
+    return data
 
+
+def save_settings(patch):
+    """合并写入。先写临时文件再替换，避免写一半断电留下坏配置。"""
+    with _settings_lock:
+        data = load_settings()
+        for k, v in (patch or {}).items():
+            if k in DEFAULT_SETTINGS:
+                data[k] = v
+        tmp = CONFIG_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        tmp.replace(CONFIG_PATH)
+        return data
+
+
+# ---------- 设备扫描 ----------
 
 def create_server():
     """依次尝试端口，返回 (server, 实际端口)。"""
@@ -82,7 +117,6 @@ def collect_devices(force=False):
     if not force and now - _cache["at"] < CACHE_TTL:
         return [dict(d) for d in _cache["devices"]]
     with _scan_lock:
-        # 排队期间可能已经有别的线程扫完了
         now = time.time()
         if not force and now - _cache["at"] < CACHE_TTL:
             return [dict(d) for d in _cache["devices"]]
@@ -104,42 +138,170 @@ def do_control(vendor, device_id, action, payload):
     return {"ok": False, "error": f"未知厂商: {vendor}"}
 
 
+# ---------- HTTP ----------
+
+CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".woff2": "font/woff2",
+}
+
+IMAGE_EXT = {"image/png": ".png", "image/jpeg": ".jpg",
+             "image/webp": ".webp", "image/gif": ".gif"}
+
+
+class LocalServer(ThreadingHTTPServer):
+    """本地 HTTP 服务。
+
+    Windows 的 SO_REUSEADDR 语义和 Unix 不同：开着它时第二个进程能抢占同一端口，
+    导致「端口被占用却以为自己绑上了」。所以 Windows 下关掉，让占用能被检测到，
+    交给 create_server() 顺延端口。
+    """
+    daemon_threads = True
+    allow_reuse_address = sys.platform != "win32"
+
+
 class Handler(BaseHTTPRequestHandler):
+    server_version = "HIDCircus"
+
     def log_message(self, *args):
         pass  # 静默访问日志
+
+    # ----- 工具 -----
 
     def _send(self, body: bytes, content_type="application/json", status=200):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
+    def _json(self, obj, status=200):
+        self._send(json.dumps(obj, ensure_ascii=False).encode(), status=status)
+
+    def _read_body(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        return self.rfile.read(length) if length else b""
+
+    def _serve_file(self, path: Path):
+        if not path.is_file():
+            self._json({"error": "not found"}, 404)
+            return
+        ext = path.suffix.lower()
+        self._send(path.read_bytes(),
+                   CONTENT_TYPES.get(ext, "application/octet-stream"))
+
+    def _safe_web_path(self, rel: str) -> Path:
+        """只允许 web/ 下的文件，挡住 .. 穿越。"""
+        target = (WEB_DIR / rel).resolve()
+        if WEB_DIR.resolve() not in target.parents and target != WEB_DIR.resolve():
+            return None
+        return target
+
+    # ----- GET -----
+
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
-            f = WEB_DIR / "index.html"
-            self._send(f.read_bytes(), "text/html; charset=utf-8")
+        route = urlparse(self.path).path
+
+        if route in ("/", "/index.html"):
+            self._serve_file(WEB_DIR / "index.html")
             return
-        if self.path == "/api/devices":
-            self._send(json.dumps({"devices": collect_devices()},
-                                  ensure_ascii=False).encode())
+        if route == "/api/devices":
+            self._json({"devices": collect_devices()})
             return
-        self._send(b'{"error":"not found"}', status=404)
+        if route == "/api/settings":
+            self._json(load_settings())
+            return
+        if route.startswith("/assets/background/"):
+            name = Path(unquote(route.rsplit("/", 1)[-1])).name
+            self._serve_file(BACKGROUND_DIR / name)
+            return
+        if route.startswith("/web/"):
+            target = self._safe_web_path(route[len("/web/"):])
+            if target is None:
+                self._json({"error": "forbidden"}, 403)
+            else:
+                self._serve_file(target)
+            return
+        self._json({"error": "not found"}, 404)
+
+    # ----- 写入 -----
 
     def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        raw = self.rfile.read(length) if length else b"{}"
-        try:
-            body = json.loads(raw or b"{}")
-        except json.JSONDecodeError:
-            self._send(b'{"ok":false,"error":"invalid json"}', status=400)
+        route = urlparse(self.path).path
+        raw = self._read_body()
+
+        if route == "/api/control":
+            try:
+                body = json.loads(raw or b"{}")
+            except json.JSONDecodeError:
+                self._json({"ok": False, "error": "invalid json"}, 400)
+                return
+            self._json(do_control(body.get("vendor", ""), body.get("device_id", ""),
+                                  body.get("action", ""), body.get("payload", {})))
             return
-        if self.path == "/api/control":
-            result = do_control(body.get("vendor", ""), body.get("device_id", ""),
-                                body.get("action", ""), body.get("payload", {}))
-            self._send(json.dumps(result, ensure_ascii=False).encode())
+
+        if route == "/api/settings":
+            try:
+                patch = json.loads(raw or b"{}")
+            except json.JSONDecodeError:
+                self._json({"ok": False, "error": "invalid json"}, 400)
+                return
+            if not isinstance(patch, dict):
+                self._json({"ok": False, "error": "expect object"}, 400)
+                return
+            self._json({"ok": True, "settings": save_settings(patch)})
             return
-        self._send(b'{"error":"not found"}', status=404)
+
+        if route == "/api/background":
+            self._save_background(raw)
+            return
+
+        if route == "/api/refresh":
+            collect_devices(force=True)
+            self._json({"ok": True})
+            return
+
+        self._json({"error": "not found"}, 404)
+
+    def do_DELETE(self):
+        route = urlparse(self.path).path
+        if route == "/api/background":
+            settings = load_settings()
+            name = settings.get("background")
+            if name:
+                (BACKGROUND_DIR / Path(name).name).unlink(missing_ok=True)
+            save_settings({"background": ""})
+            self._json({"ok": True, "settings": load_settings()})
+            return
+        self._json({"error": "not found"}, 404)
+
+    def _save_background(self, raw: bytes):
+        """接收原始图片字节，存成固定文件名（只保留一张，省得堆垃圾）。"""
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip()
+        ext = IMAGE_EXT.get(ctype)
+        if ext is None:
+            self._json({"ok": False, "error": f"不支持的图片类型: {ctype}"}, 400)
+            return
+        if not raw or len(raw) > MAX_BACKGROUND:
+            self._json({"ok": False, "error": "图片为空或超过 12MB"}, 400)
+            return
+        BACKGROUND_DIR.mkdir(parents=True, exist_ok=True)
+        for old in BACKGROUND_DIR.iterdir():      # 旧图删掉
+            if old.is_file():
+                old.unlink(missing_ok=True)
+        name = f"bg{ext}"
+        (BACKGROUND_DIR / name).write_bytes(raw)
+        settings = save_settings({"background": name})
+        self._json({"ok": True, "settings": settings})
 
 
 def main():
