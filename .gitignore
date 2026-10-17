@@ -27,3 +27,6 @@ assets/background/
 # 临时测试脚本
 .tmp_*
 
+
+# pip 临时解包目录
+pip-unpack-*/

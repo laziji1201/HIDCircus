@@ -18,6 +18,7 @@ import ctypes
 import json
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -157,6 +158,21 @@ def log_dir():
 LOG_FILE = log_dir() / "app.log"
 
 
+_SCRUB_RULES = (
+    (re.compile(r"([A-Za-z]:\\Users\\)[^\\\s]+"), r"\1<user>"),
+    (re.compile(r"\b[0-9A-Fa-f]{12,}\b"), "<id>"),
+    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "<email>"),
+)
+
+
+def _scrub(msg):
+    """日志脱敏：用户名、疑似序列号、邮箱都不该写进日志文件。"""
+    text = str(msg)
+    for pattern, repl in _SCRUB_RULES:
+        text = pattern.sub(repl, text)
+    return text
+
+
 def log(msg):
     """pythonw 没有控制台，出错只能靠文件留痕。"""
     try:
@@ -164,7 +180,7 @@ def log(msg):
             LOG_FILE.write_text("", encoding="utf-8")
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
         with LOG_FILE.open("a", encoding="utf-8") as f:
-            f.write(f"[{stamp}] {msg}\n")
+            f.write(f"[{stamp}] {_scrub(msg)}\n")
     except Exception:
         pass
 
@@ -235,6 +251,91 @@ def poll_loop():
     while not _stop.is_set():
         update_tray()
         _stop.wait(TRAY_POLL)
+
+
+# ---------------------------------------------------------------- 设备插拔
+
+WM_DEVICECHANGE = 0x0219
+DBT_DEVICEARRIVAL = 0x8000
+DBT_DEVICEREMOVECOMPLETE = 0x8004
+DEVICE_NOTIFY_WINDOW_HANDLE = 0
+
+
+class _GUID(ctypes.Structure):
+    _fields_ = [("Data1", w.DWORD), ("Data2", w.WORD), ("Data3", w.WORD),
+                ("Data4", ctypes.c_ubyte * 8)]
+
+
+class _DEV_BROADCAST_DEVICEINTERFACE(ctypes.Structure):
+    _fields_ = [("dbcc_size", w.DWORD), ("dbcc_devicetype", w.DWORD),
+                ("dbcc_reserved", w.DWORD), ("dbcc_classguid", _GUID),
+                ("dbcc_name", w.WCHAR * 1)]
+
+
+# {4D1E55B2-F16F-11CF-88CB-001111000030} = HID 设备接口
+_HID_IFACE = _GUID(0x4D1E55B2, 0xF16F, 0x11CF,
+                   (ctypes.c_ubyte * 8)(0x88, 0xCB, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30))
+
+
+def start_device_watch():
+    """监听设备插拔：插上鼠标/耳机立刻刷新，不用等下一次轮询。
+
+    用一个隐藏窗口收 WM_DEVICECHANGE，避免给每台设备开线程。
+    """
+    user32.RegisterDeviceNotificationW.restype = ctypes.c_void_p
+    user32.RegisterDeviceNotificationW.argtypes = [w.HWND, ctypes.c_void_p, w.DWORD]
+    user32.CreateWindowExW.restype = w.HWND
+    proc = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, w.HWND, w.UINT, w.WPARAM, w.LPARAM)(
+        _device_wndproc)
+
+    class WNDCLASS(ctypes.Structure):
+        _fields_ = [("style", w.UINT), ("lpfnWndProc", ctypes.c_void_p),
+                    ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int),
+                    ("hInstance", w.HINSTANCE), ("hIcon", w.HICON),
+                    ("hCursor", w.HANDLE), ("hBackground", w.HBRUSH),
+                    ("lpszMenuName", w.LPCWSTR), ("lpszClassName", w.LPCWSTR)]
+
+    hinst = kernel32.GetModuleHandleW(None)
+    wc = WNDCLASS()
+    wc.lpfnWndProc = ctypes.cast(proc, ctypes.c_void_p)
+    wc.hInstance = hinst
+    wc.lpszClassName = "HIDCircusDeviceWatch"
+    user32.RegisterClassW(ctypes.byref(wc))
+    hwnd = user32.CreateWindowExW(0, "HIDCircusDeviceWatch", "watch", 0,
+                                  0, 0, 0, 0, None, None, hinst, None)
+    if not hwnd:
+        log("设备监听窗口创建失败，继续用轮询")
+        return
+
+    filt = _DEV_BROADCAST_DEVICEINTERFACE()
+    filt.dbcc_size = ctypes.sizeof(_DEV_BROADCAST_DEVICEINTERFACE)
+    filt.dbcc_devicetype = 5          # DBT_DEVTYP_DEVICEINTERFACE
+    filt.dbcc_classguid = _HID_IFACE
+    notify = user32.RegisterDeviceNotificationW(hwnd, ctypes.byref(filt),
+                                                DEVICE_NOTIFY_WINDOW_HANDLE)
+    if not notify:
+        log("设备通知注册失败，继续用轮询")
+        return
+    log("已监听设备插拔（插入/移除后立刻刷新）")
+    msg = w.MSG()
+    while not _stop.is_set() and user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+        user32.TranslateMessage(ctypes.byref(msg))
+        user32.DispatchMessageW(ctypes.byref(msg))
+
+
+def _device_wndproc(hwnd, msg, wparam, lparam):
+    if msg == WM_DEVICECHANGE and wparam in (DBT_DEVICEARRIVAL, DBT_DEVICEREMOVECOMPLETE):
+        # 给系统一点时间枚举完新设备，再强制重扫
+        def _rescan():
+            time.sleep(0.8)
+            try:
+                collect_devices(force=True)
+                update_tray(force=True)
+            except Exception:
+                log("插拔后刷新失败: " + traceback.format_exc())
+        threading.Thread(target=_rescan, daemon=True).start()
+        return 0
+    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
 
 # ---------------------------------------------------------------- 窗口识别
@@ -706,8 +807,18 @@ def main():
     log(f"进程完整性: {INTEGRITY_LEVELS.get(level, hex(level) if level else '未知')}")
     if level is not None and level < 0x2000:
         _low_integrity = True
-        log("警告：进程权限被降级，托盘与无边框窗口都不可能工作（已弹窗提示）")
-        threading.Thread(target=warn_low_integrity, daemon=True).start()
+        marker = ROOT / ".runtime" / "low-integrity-warned"
+        if not marker.exists():
+            log("警告：进程权限被降级，托盘与无边框窗口都不可能工作（弹窗提示一次，"
+                "之后不再打扰；删除 .runtime/low-integrity-warned 可重置）")
+            try:
+                marker.parent.mkdir(exist_ok=True)
+                marker.write_text("1", encoding="utf-8")
+            except OSError:
+                pass
+            threading.Thread(target=warn_low_integrity, daemon=True).start()
+        else:
+            log("警告：仍是低权限运行，托盘与无边框窗口不可用（已提示过，不再弹窗）")
 
     log(f"{APP_NAME} 启动")
 
@@ -766,6 +877,8 @@ def main():
     log("托盘已就绪" if tray_ok else "托盘不可用，退化为只看窗口")
 
     threading.Thread(target=open_panel, args=(port,), daemon=True).start()
+
+    threading.Thread(target=start_device_watch, daemon=True).start()
 
     if tray_ok:
         threading.Thread(target=poll_loop, daemon=True).start()

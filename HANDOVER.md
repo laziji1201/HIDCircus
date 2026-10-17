@@ -259,7 +259,15 @@ buf[89]     校验
     我们（普通权限）再拉起 Edge 就会弹这个框，而且每一档重试都会再弹一个。
     现在开窗前会检测这个对话框，一旦出现立刻停止重试并写日志。
     根治办法是关掉那个管理员权限的 Edge 窗口
-34. **系统代理会把 127.0.0.1 也劫持掉**（这台机器就有），表现是 Edge `--app` 窗口标题变成
+34. **`.ps1` 必须存成带 BOM 的 UTF-8**：Windows PowerShell 5.1 读无 BOM 的 UTF-8 会按 ANSI 解析，
+    中文全变乱码，然后语法报错（`Array index expression is missing`）。`tools/setup.ps1` 就是踩过这个坑。
+    判断方法：`powershell -File tools\setup.ps1` 直接跑一次，看中文是否正常
+35. **本机接口加了 token**：服务启动生成随机 token，注入首页 `window.__TOKEN__`，
+    所有写入接口（control/settings/background/refresh/panel/autostart）要求 `X-HIDCircus-Token` 头，
+    `/api/ping` 不校验（心跳要简单）。手动调试接口时要先取 token
+36. **设备插拔走 WM_DEVICECHANGE**：隐藏窗口注册 HID 设备接口通知，插拔后 0.8 秒强制重扫，
+    不再干等 10 秒轮询
+37. **系统代理会把 127.0.0.1 也劫持掉**（这台机器就有），表现是 Edge `--app` 窗口标题变成
     `127.0.0.1`、页面永远白屏——看起来像渲染进程崩溃，其实是代理把本地回环请求转走了。
     现在所有浏览器启动都带 `--no-proxy-server`，问题消失。排查这类"窗口开了但白屏"，
     先看服务端有没有收到请求（`HIDCIRCUS_DEBUG=1` 时写 `logs/requests.log`）

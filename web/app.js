@@ -78,10 +78,21 @@
     return "#" + (rgb || [0, 0, 0]).map((n) => pad2(Math.max(0, Math.min(255, n)).toString(16))).join("");
   }
 
-  /* ---------------- 接口 ---------------- */
+  /* ---------------- 接口 ----------------
+     写入类接口要求带 token：它是服务端启动时生成的，
+     只有这个页面能拿到（注入在 HTML 里），别的本机程序调不动。 */
+
+  const TOKEN = window.__TOKEN__ || "";
 
   async function api(path, options) {
-    const res = await fetch(path, options);
+    const opts = Object.assign({}, options);
+    const method = (opts.method || "GET").toUpperCase();
+    if (method !== "GET") {
+      opts.headers = Object.assign({}, opts.headers, {
+        "X-HIDCircus-Token": TOKEN,
+      });
+    }
+    const res = await fetch(path, opts);
     if (!res.ok && res.status >= 500) throw new Error(`HTTP ${res.status}`);
     return res.json().catch(() => ({}));
   }
@@ -393,7 +404,7 @@
       <article class="card ${batteryClass(value)}" data-id="${esc(d.id)}" data-vendor="${esc(d.vendor_key || "")}">
         <div class="card-head">
           <i class="vdot" style="background:${hue};box-shadow:0 0 0 3px ${hue}22"></i>
-          <span class="card-name">${esc(d.name)}</span>
+          <span class="card-name" data-alias="${esc(d.id)}" title="${esc(t("alias.prompt"))}">${esc(d.name)}</span>
           <span class="card-kind">${esc(kind)}</span>
           <span class="pill ${status.kind}">${esc(status.text)}</span>
         </div>
@@ -472,6 +483,9 @@
     const vendors = Array.from(new Set((state.devices || []).map((d) => d.vendor))).filter(Boolean);
     $("#aboutProviders").textContent = vendors.length ? vendors.join(" / ") : "—";
     $("#aboutUrl").textContent = location.origin;
+    api("/api/autostart").then((st) => {
+      mark("#autostartSeg", st && st.enabled ? "on" : "off");
+    }).catch(() => {});
     api("/api/status").then((st) => {
       const tray = $("#aboutTray");
       if (tray && st) {
@@ -509,6 +523,80 @@
     }
     Array.from(box.querySelectorAll("button[data-value]")).forEach((b) =>
       b.classList.toggle("is-active", b.dataset.value === active));
+  }
+
+  /* ---------------- 配置备份 ---------------- */
+
+  const PORTABLE_KEYS = ["theme", "language", "palette", "motion", "bg_dim",
+                         "bg_blur", "refresh_seconds", "device_order", "aliases"];
+
+  function exportSettings() {
+    const s = state.settings || {};
+    const out = {};
+    PORTABLE_KEYS.forEach((k) => { if (s[k] !== undefined) out[k] = s[k]; });
+    out._app = "HIDCircus";
+    out._version = 1;
+    const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "hidcircus-settings.json";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast(t("toast.exported"), "ok");
+  }
+
+  async function importSettings(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    let data;
+    try {
+      data = JSON.parse(await file.text());
+    } catch (_) {
+      toast(t("toast.importFailed"), "bad");
+      return;
+    }
+    const patch = {};
+    PORTABLE_KEYS.forEach((k) => { if (data[k] !== undefined) patch[k] = data[k]; });
+    if (!Object.keys(patch).length) {
+      toast(t("toast.importFailed"), "bad");
+      return;
+    }
+    const out = await api("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (out.ok) {
+      state.settings = out.settings;
+      applyTheme(); applyPalette(); applyMotion(); applyLang(); applyBackground();
+      renderSettingsState(); renderDevices();
+      toast(t("toast.imported"), "ok");
+    } else {
+      toast(`${t("toast.failed")}: ${out.error || "?"}`, "bad");
+    }
+  }
+
+  /* ---------------- 设备别名 ---------------- */
+
+  async function renameDevice(id, current) {
+    const name = window.prompt(t("alias.prompt"), current || "");
+    if (name === null) return;
+    const aliases = Object.assign({}, (state.settings && state.settings.aliases) || {});
+    if (name.trim()) aliases[id] = name.trim();
+    else delete aliases[id];
+    const out = await api("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ aliases }),
+    });
+    if (out.ok) {
+      state.settings = out.settings;
+      await loadDevices(true);
+      toast(t("toast.aliasSaved"), "ok");
+    } else {
+      toast(`${t("toast.failed")}: ${out.error || "?"}`, "bad");
+    }
   }
 
   /* ---------------- 提示 ---------------- */
@@ -657,6 +745,36 @@
       applyLang();
     });
 
+    $("#autostartSeg").addEventListener("click", async (e) => {
+      const btn = e.target.closest("button[data-value]");
+      if (!btn) return;
+      const on = btn.dataset.value === "on";
+      const out = await api("/api/autostart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on }),
+      });
+      if (out.ok) {
+        toast(on ? t("toast.autostartOn") : t("toast.autostartOff"), "ok");
+        mark("#autostartSeg", on ? "on" : "off");
+      } else {
+        toast(`${t("toast.failed")}: ${out.error || out.message || "?"}`, "bad");
+      }
+    });
+
+    // 双击设备名 = 改别名（留空恢复原厂名）
+    $("#deviceGrid").addEventListener("dblclick", (e) => {
+      const el = e.target.closest("[data-alias]");
+      if (!el) return;
+      const id = el.dataset.alias;
+      const dev = (state.devices || []).find((d) => d.id === id);
+      renameDevice(id, dev ? (dev.raw_name === dev.name ? "" : dev.name) : "");
+    });
+
+    $("#exportSettings").addEventListener("click", exportSettings);
+    $("#importSettings").addEventListener("click", () => $("#importFile").click());
+    $("#importFile").addEventListener("change", importSettings);
+
     $("#refreshSeg").addEventListener("click", async (e) => {
       const btn = e.target.closest("button");
       if (!btn) return;
@@ -680,7 +798,10 @@
       if (file.size > 12 * 1024 * 1024) { toast(t("toast.tooBig"), "bad"); return; }
       const res = await fetch("/api/background", {
         method: "POST",
-        headers: { "Content-Type": file.type || "application/octet-stream" },
+        headers: {
+          "Content-Type": file.type || "application/octet-stream",
+          "X-HIDCircus-Token": TOKEN,
+        },
         body: file,
       });
       const out = await res.json().catch(() => ({}));

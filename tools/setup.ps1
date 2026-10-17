@@ -1,13 +1,10 @@
-﻿# HIDCircus 开机自启 / 桌面快捷方式配置（只需运行一次）
+﻿# HIDCircus 开机自启 / 桌面快捷方式（只需运行一次）
 # 用法：setup.bat            安装（开机自启 + 桌面快捷方式）
 #       setup.bat uninstall  卸载
 param([string]$Mode = "install")
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$pythonw = Join-Path $root '.venv\Scripts\pythonw.exe'
-$appPy = Join-Path $root 'app.py'
-$icon = Join-Path $root 'assets\icon.ico'
 $taskName = 'HIDCircus'
 $desktop = [Environment]::GetFolderPath('Desktop')
 $shortcut = Join-Path $desktop 'HIDCircus.lnk'
@@ -23,33 +20,56 @@ if ($Mode -eq 'uninstall') {
     exit 0
 }
 
-if (-not (Test-Path $pythonw)) {
-    Write-Host "[!] 找不到 .venv\Scripts\pythonw.exe"
-    Write-Host "    请先在项目目录运行：py -3.10 -m venv .venv"
+# 源码运行用 pythonw，打包后用 exe（按可能性依次找）
+$pythonw = Join-Path $root '.venv\Scripts\pythonw.exe'
+$exe = $null
+foreach ($candidate in @((Join-Path $root 'HIDCircus.exe'), (Join-Path $root 'dist\HIDCircus.exe'))) {
+    if (Test-Path $candidate) { $exe = $candidate; break }
+}
+
+if ($exe) {
+    $launchExe = $exe
+    $launchArgs = '--silent'
+    $workDir = Split-Path -Parent $exe
+} elseif (Test-Path $pythonw) {
+    $launchExe = $pythonw
+    $launchArgs = '"' + (Join-Path $root 'app.py') + '" --silent'
+    $workDir = $root
+} else {
+    Write-Host '[!] 既没找到 HIDCircus.exe，也没找到 .venv\Scripts\pythonw.exe'
+    Write-Host '    源码运行请先执行：py -3.10 -m venv .venv'
     exit 1
 }
 
-# 1) 计划任务：登录时以当前用户身份启动，静默进托盘
-#    不用 -RunLevel Highest：那样每次都要管理员权限；普通权限就够（托盘/窗口都正常）
-$action = New-ScheduledTaskAction -Execute $pythonw `
-    -Argument ('"' + $appPy + '" --silent') -WorkingDirectory $root
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
-    -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-    -Settings $settings -Description 'HIDCircus 外设控制台（托盘常驻）' -Force | Out-Null
-Write-Host '[OK] 已注册开机自启：登录 Windows 后自动进托盘'
+Write-Host "启动方式: $launchExe"
 
-# 2) 桌面快捷方式：走计划任务启动，避免从低权限入口继承降权
-$shell = New-Object -ComObject WScript.Shell
-$lnk = $shell.CreateShortcut($shortcut)
-$lnk.TargetPath = Join-Path $env:SystemRoot 'System32\schtasks.exe'
-$lnk.Arguments = "/run /tn `"$taskName`""
-$lnk.WorkingDirectory = $root
-$lnk.IconLocation = $icon
-$lnk.Description = 'HIDCircus 外设控制台'
-$lnk.Save()
-Write-Host "[OK] 已创建桌面快捷方式：$shortcut"
+try {
+    $action = New-ScheduledTaskAction -Execute $launchExe -Argument $launchArgs -WorkingDirectory $workDir
+    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'HIDCircus 外设控制台（托盘常驻）' -Force | Out-Null
+    Write-Host '[OK] 已注册开机自启：登录 Windows 后自动进托盘'
+} catch {
+    Write-Host "[!] 注册开机自启失败：$($_.Exception.Message)"
+    Write-Host '    常见原因：计划任务被组策略禁用，或当前会话权限被降级。'
+    Write-Host '    可以手动把快捷方式放进 shell:startup 文件夹代替。'
+    exit 2
+}
+
+try {
+    $shell = New-Object -ComObject WScript.Shell
+    $lnk = $shell.CreateShortcut($shortcut)
+    $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+    $lnk.Arguments = '/run /tn "' + $taskName + '"'
+    $lnk.WorkingDirectory = $workDir
+    $lnk.Description = 'HIDCircus 外设控制台'
+    $icon = Join-Path $root 'assets\icon.ico'
+    if (Test-Path $icon) { $lnk.IconLocation = $icon }
+    $lnk.Save()
+    Write-Host "[OK] 已创建桌面快捷方式：$shortcut"
+} catch {
+    Write-Host "[!] 创建快捷方式失败：$($_.Exception.Message)"
+}
+
 Write-Host ''
 Write-Host '以后双击桌面上的 HIDCircus 即可，它以正常权限启动，不会再要求提权。'

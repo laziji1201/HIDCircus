@@ -10,6 +10,7 @@
 <script>
   /* 服务端注入的偏好，必须在首帧之前落到 <html> 上，否则会闪一下 */
   window.__PREFS__ = __PREFS_JSON__;
+  window.__TOKEN__ = "__SESSION_TOKEN__";
   (function () {
     var p = window.__PREFS__ || {};
     var root = document.documentElement;
@@ -234,6 +235,34 @@
               <button data-value="10">10s</button>
               <button data-value="30">30s</button>
               <button data-value="0" data-i18n="settings.refresh.off">关闭</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2 data-i18n="settings.system">系统</h2>
+            <p data-i18n="settings.system.sub">开机自启与配置备份</p>
+          </div>
+          <div class="field">
+            <div class="field-label">
+              <span data-i18n="settings.autostart">开机自启</span>
+              <em data-i18n="settings.autostart.sub">注册计划任务：登录后自动进托盘，不需要管理员权限</em>
+            </div>
+            <div class="segmented" id="autostartSeg">
+              <button data-value="off" data-i18n="common.off">关闭</button>
+              <button data-value="on" data-i18n="common.on">开启</button>
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">
+              <span data-i18n="settings.backup">配置备份</span>
+              <em data-i18n="settings.backup.sub">导出/导入主题、配色、设备顺序与别名（不含背景图）</em>
+            </div>
+            <div class="row-actions">
+              <button class="btn btn-ghost" id="exportSettings" data-i18n="settings.export">导出</button>
+              <button class="btn btn-ghost" id="importSettings" data-i18n="settings.import">导入</button>
+              <input type="file" id="importFile" accept="application/json,.json" hidden>
             </div>
           </div>
         </div>

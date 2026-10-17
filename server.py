@@ -9,6 +9,8 @@
 
 import json
 import os
+import secrets
+import subprocess
 import sys
 import threading
 import time
@@ -48,6 +50,7 @@ DEFAULT_SETTINGS = {
     "bg_blur": 0,           # 背景模糊半径 0–24 px
     "refresh_seconds": 10,  # 自动刷新间隔
     "device_order": [],     # 用户拖拽出来的设备顺序（设备 id 列表）
+    "aliases": {},          # device_id -> 自定义名字
     "palette": "silver",    # 配色预设 silver / amber / sakura / neon
     "motion": "auto",       # auto=跟随系统（关掉动画时少做位移） / on=始终开启动效
 }
@@ -57,6 +60,10 @@ STATUS = {"tray": None, "port": None, "log": "", "last_ping": 0.0}
 
 # 页面发过来、由桌面壳（app.py）执行的请求：0 表示没有
 UI_REQUESTS = {"panel": 0.0}
+
+# 本机随机 token：只有页面知道自己该带什么，别的程序随手调不了 /api/control。
+# 注意它只防"顺手误调/顺手乱改"，不是网络级安全（服务只监听 127.0.0.1）。
+SESSION_TOKEN = secrets.token_urlsafe(18)
 
 _scan_lock = threading.Lock()
 _cache = {"at": 0.0, "devices": []}
@@ -132,9 +139,20 @@ def collect_devices(force=False):
         if not force and now - _cache["at"] < CACHE_TTL:
             return [dict(d) for d in _cache["devices"]]
         devices = _scan_all()
+        _apply_aliases(devices)
         _cache["devices"] = devices
         _cache["at"] = time.time()
     return [dict(d) for d in devices]
+
+
+def _apply_aliases(devices):
+    """把用户起的名字套到设备上（改完后名称即别名，原厂名留在 raw_name）。"""
+    aliases = load_settings().get("aliases") or {}
+    for d in devices:
+        d.setdefault("raw_name", d.get("name", ""))
+        alias = aliases.get(d.get("id", ""))
+        if alias:
+            d["name"] = alias
 
 
 def do_control(vendor, device_id, action, payload):
@@ -227,6 +245,8 @@ class Handler(BaseHTTPRequestHandler):
                  "palette": s.get("palette", "silver"),
                  "language": s.get("language", "zh")}
         html = html.replace("__PREFS_JSON__", json.dumps(prefs))
+        # 页面拿这个 token 才能调写入接口，别的本机程序读不到它
+        html = html.replace("__SESSION_TOKEN__", SESSION_TOKEN)
         self._send(html.encode("utf-8"), "text/html; charset=utf-8")
 
     def _serve_file(self, path: Path):
@@ -236,6 +256,13 @@ class Handler(BaseHTTPRequestHandler):
         ext = path.suffix.lower()
         self._send(path.read_bytes(),
                    CONTENT_TYPES.get(ext, "application/octet-stream"))
+
+    def _require_token(self) -> bool:
+        """写入类接口要求 token；不对就回 403。"""
+        if self.headers.get("X-HIDCircus-Token") == SESSION_TOKEN:
+            return True
+        self._json({"ok": False, "error": "unauthorized"}, 403)
+        return False
 
     def _safe_web_path(self, rel: str) -> Path:
         """只允许 web/ 下的文件，挡住 .. 穿越。"""
@@ -261,6 +288,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/api/settings":
             self._json(load_settings())
+            return
+        if route == "/api/autostart":
+            self._json({"enabled": autostart_enabled()})
             return
         if route.startswith("/assets/background/"):
             name = Path(unquote(route.rsplit("/", 1)[-1])).name
@@ -290,6 +320,10 @@ class Handler(BaseHTTPRequestHandler):
         _debug_log(f"POST {self.path}")
         raw = self._read_body()
 
+        # ping 不校验（心跳要简单可靠），其余写入接口都要
+        if route != "/api/ping" and not self._require_token():
+            return
+
         if route == "/api/control":
             try:
                 body = json.loads(raw or b"{}")
@@ -312,6 +346,14 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(patch, dict):
                 self._json({"ok": False, "error": "expect object"}, 400)
                 return
+            aliases = patch.get("aliases")
+            if aliases is not None:
+                if not isinstance(aliases, dict):
+                    self._json({"ok": False, "error": "aliases 必须是对象"}, 400)
+                    return
+                # 只保留 "字符串键 -> 短字符串值"，防止塞进奇怪的东西
+                patch["aliases"] = {str(k)[:64]: str(v)[:24]
+                                    for k, v in aliases.items() if v}
             self._json({"ok": True, "settings": save_settings(patch)})
             return
 
@@ -331,6 +373,16 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/refresh":
             collect_devices(force=True)
             self._json({"ok": True})
+            return
+
+        if route == "/api/autostart":
+            try:
+                body = json.loads(raw or b"{}")
+            except json.JSONDecodeError:
+                self._json({"ok": False, "error": "invalid json"}, 400)
+                return
+            result = set_autostart(bool(body.get("on")))
+            self._json(result)
             return
 
         self._json({"error": "not found"}, 404)
@@ -365,6 +417,43 @@ class Handler(BaseHTTPRequestHandler):
         (BACKGROUND_DIR / name).write_bytes(raw)
         settings = save_settings({"background": name})
         self._json({"ok": True, "settings": settings})
+
+
+def autostart_enabled():
+    """计划任务是否存在（普通用户查询自己的任务不需要权限）。"""
+    try:
+        proc = subprocess.run(["schtasks", "/query", "/tn", "HIDCircus"],
+                              capture_output=True, text=True, timeout=15,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+def set_autostart(enabled: bool):
+    """注册/移除开机自启计划任务（调用 tools/setup.ps1）。
+
+    普通用户权限就能注册"以当前用户身份运行"的任务，不需要管理员。
+    """
+    script = BASE_DIR / "tools" / "setup.ps1"
+    if not script.exists():
+        return {"ok": False, "error": "找不到 tools/setup.ps1"}
+    mode = "install" if enabled else "uninstall"
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", str(script), "-Mode", mode],
+            capture_output=True, text=True, timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        ok = proc.returncode == 0
+        lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+        detail = (proc.stderr or "").strip()
+        message = lines[-1] if lines else (detail[:300] or "执行失败")
+        if not ok and detail and detail not in message:
+            message = f"{message} | {detail[:200]}"
+        return {"ok": ok, "enabled": enabled, "message": message}
+    except Exception as e:
+        return {"ok": False, "error": f"执行失败: {e}"}
 
 
 def main():
