@@ -541,7 +541,7 @@ def open_flyout(port):
     seed_profile(profile)
     args = [
         browser,
-        f"--app=http://{HOST}:{port}/#flyout",
+        f"--app=http://{HOST}:{port}/flyout",
         f"--user-data-dir={profile}",
         *EDGE_BROWSER_FLAGS,
         f"--window-size={width},{height}",

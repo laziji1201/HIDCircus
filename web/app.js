@@ -526,13 +526,18 @@
   function renderPalettes(active) {
     const box = $("#paletteSeg");
     if (!box) return;
-    if (box.dataset.built !== "1") {
+    // 文案跟着语言走：语言变了就重建按钮；点击事件只绑一次，避免重复累积
+    const lang = (state.settings && state.settings.language) || "zh";
+    if (box.dataset.built !== lang) {
       box.innerHTML = PALETTES.map((p) => `
         <button class="palette-item" data-value="${p.id}">
           <span class="swatch" style="background:linear-gradient(140deg, ${p.colors[0]}, ${p.colors[1]})"></span>
           <span>${esc(t(p.key))}</span>
         </button>`).join("");
-      box.dataset.built = "1";
+      box.dataset.built = lang;
+    }
+    if (box.dataset.bound !== "1") {
+      box.dataset.bound = "1";
       box.addEventListener("click", async (e) => {
         const btn = e.target.closest("button[data-value]");
         if (!btn) return;
@@ -859,7 +864,7 @@
     wire();
     startHeartbeat();
     if (location.hash === "#settings") state.page = "settings";
-    if (location.hash === "#flyout") enterFlyout();
+    if (location.hash === "#flyout" || location.pathname === "/flyout") enterFlyout();
     try {
       await loadSettings();
     } catch (err) {

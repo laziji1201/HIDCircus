@@ -70,6 +70,41 @@ class LogitechProvider(Provider):
             return None, None
         return s[4], bool(s[5] & 0x01)
 
+    def _all_pids(self):
+        pids = []
+        for d in self.hid.enumerate(0x046D):
+            if d.get("usage_page") == 0xFF00 and d["product_id"] not in pids:
+                pids.append(d["product_id"])
+        return pids
+
+    def _product_name(self, pid, fallback):
+        for d in self.hid.enumerate(0x046D, pid):
+            name = (d.get("product_string") or "").strip()
+            if name:
+                return name
+        return fallback
+
+    def _probe_unknown(self, pid):
+        """HID++ 的电量 feature 0x1004 是跨型号通用的，先试探它。"""
+        short, long_ = self._find(pid)
+        if not short or not long_:
+            return None
+        hs, hl = self._open(short), self._open(long_)
+        try:
+            dev = Device(id=f"logitech:{pid:04x}",
+                         name=self._product_name(pid, f"Logitech {pid:04x}"),
+                         vendor=self.LABEL, kind="unknown")
+            battery, charging = self._battery(hs, hl)
+            if battery is None:
+                dev.note = "该型号尚未适配，读不到电量"
+            else:
+                dev.battery = battery
+                dev.charging = charging
+            return dev
+        finally:
+            hs.close()
+            hl.close()
+
     def scan(self):
         devices = []
         for pid, (name, kind) in self.KNOWN.items():
@@ -90,6 +125,16 @@ class LogitechProvider(Provider):
             finally:
                 hs.close()
                 hl.close()
+        seen = set(self.KNOWN)
+        for pid in self._all_pids():
+            if pid in seen:
+                continue
+            try:
+                dev = self._probe_unknown(pid)
+            except Exception:
+                dev = None
+            if dev is not None:
+                devices.append(dev)
         return devices
 
     def control(self, device_id, action, payload):

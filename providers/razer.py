@@ -140,6 +140,35 @@ class RazerProvider(Provider):
 
     # ---------- 对外接口 ----------
 
+    def _all_pids(self):
+        pids = []
+        for d in self.hid.enumerate(0x1532):
+            if d.get("usage_page") == 0x0001 and d.get("usage") == 0x0002 \
+                    and d["product_id"] not in pids:
+                pids.append(d["product_id"])
+        return pids
+
+    def _probe_unknown(self, pid):
+        """91 字节报文协议在雷蛇各型号间基本一致，逐项试探。"""
+        path = self._find_path(pid)
+        if not path:
+            return None
+        h = self._open(path)
+        if h is None:
+            return None
+        try:
+            name = None
+            for d in self.hid.enumerate(0x1532, pid):
+                name = (d.get("product_string") or "").strip() or name
+            dev = Device(id=f"razer:{pid:04x}", name=name or f"Razer {pid:04x}",
+                         vendor=self.LABEL, kind="unknown")
+            self._fill(h, dev)          # 电量/充电/DPI/轮询率，能读到的都会填上
+            if dev.battery is None and not dev.extra.get("dpi"):
+                dev.note = "该型号尚未适配，读不到电量"
+            return dev
+        finally:
+            kernel32.CloseHandle(h)
+
     def scan(self):
         devices = []
         for pid, (name, kind) in self.KNOWN.items():
@@ -157,6 +186,16 @@ class RazerProvider(Provider):
                 self._fill(h, dev)
             finally:
                 kernel32.CloseHandle(h)
+        seen = set(self.KNOWN)
+        for pid in self._all_pids():
+            if pid in seen:
+                continue
+            try:
+                dev = self._probe_unknown(pid)
+            except Exception:
+                dev = None
+            if dev is not None:
+                devices.append(dev)
         return devices
 
     def _fill(self, h, dev):

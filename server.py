@@ -250,7 +250,9 @@ class Handler(BaseHTTPRequestHandler):
         route = urlparse(self.path).path
         _debug_log(f"GET {self.path} ua={self.headers.get('User-Agent', '-')[:40]}")
 
-        if route in ("/", "/index.html"):
+        # /flyout 和 / 用同一个页面，只是给托盘小面板一个独立 URL：
+        # Edge 的 --app 会把相同 URL 的窗口复用，用哈希区分会导致"小窗口里开主面板"
+        if route in ("/", "/index.html", "/flyout"):
             self._serve_index()
             return
         if route == "/api/devices":

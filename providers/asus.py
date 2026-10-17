@@ -69,6 +69,48 @@ class AsusProvider(Provider):
 
     # ---------- 对外接口 ----------
 
+    def _all_pids(self):
+        """枚举本厂商所有带控制接口的型号。"""
+        pids = []
+        for d in self.hid.enumerate(0x0B05):
+            if d.get("usage_page") == 0xFF00 and d["product_id"] not in pids:
+                pids.append(d["product_id"])
+        return pids
+
+    def _product_name(self, pid, fallback):
+        for d in self.hid.enumerate(0x0B05, pid):
+            name = (d.get("product_string") or "").strip()
+            if name:
+                return name
+        return fallback
+
+    def _probe_unknown(self, pid):
+        """未知型号：用同一套报文试探，读到什么算什么。"""
+        path = self._find_path(pid)
+        if not path:
+            return None
+        h = self._open(path)
+        try:
+            dev = Device(id=f"asus:{pid:04x}",
+                         name=self._product_name(pid, f"ASUS {pid:04x}"),
+                         vendor=self.LABEL, kind="unknown")
+            got = False
+            if (r := self._read(h, dev.id, 0x12, 0x07)):
+                dev.battery = r[6]
+                got = True
+            if (r := self._read(h, dev.id, 0x12, 0x08)):
+                dev.charging = r[5] == 1
+            if (r := self._read(h, dev.id, 0x12, 0x13)):
+                dev.extra["lighting_on"] = r[5] == 1
+                if (c := self._read(h, dev.id, 0x12, 0x03)):
+                    dev.extra["lighting"] = {"mode": c[5], "brightness": c[6],
+                                             "color": [c[7], c[8], c[9]]}
+            if not got:
+                dev.note = "该型号尚未适配，读不到电量"
+            return dev
+        finally:
+            h.close()
+
     def scan(self):
         devices = []
         for pid, name in self.KNOWN.items():
@@ -105,6 +147,16 @@ class AsusProvider(Provider):
                 devices.append(dev)
             finally:
                 h.close()
+        seen = set(self.KNOWN)
+        for pid in self._all_pids():
+            if pid in seen:
+                continue
+            try:
+                dev = self._probe_unknown(pid)
+            except Exception:
+                dev = None
+            if dev is not None:
+                devices.append(dev)
         return devices
 
     def control(self, device_id, action, payload):
