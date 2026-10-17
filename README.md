@@ -10,7 +10,7 @@
 |---|---|---|---|
 | ASUS/ROG | ROG PELTA | ✅ | 灯效 / EQ / 降噪（灯效已实测） |
 | Logitech | PRO X TKL | ✅ | 规划中 |
-| Razer | Viper V3 Pro | ✅ | 规划中（DPI 已可读） |
+| Razer | Viper V3 Pro | ✅ | DPI / 轮询率（读写闭环已实测） |
 
 ## 运行
 

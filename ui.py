@@ -185,19 +185,71 @@ class HIDCircusUI:
         tk.Label(inner, text=state, bg=CARD, fg=color,
                  font=("Microsoft YaHei UI", 8)).pack(anchor="w")
 
-        # 只读附加信息（雷蛇 DPI 等）
-        facts = []
-        dpi = extra.get("dpi")
-        if dpi:
-            facts.append(f"DPI {dpi.get('x', '?')} × {dpi.get('y', '?')}")
-        if facts:
-            tk.Label(inner, text=" · ".join(facts), bg=CARD, fg=MUTED,
-                     font=("Microsoft YaHei UI", 8)).pack(anchor="w", pady=(2, 0))
+        # 雷蛇：DPI / 轮询率（控件自己会显示当前值）
+        if d.get("vendor_key") == "razer" and extra.get("dpi"):
+            self._render_razer(inner, d, extra)
 
         # ROG 灯效控制
         lighting = extra.get("lighting")
-        if lighting and d.get("vendor") == "ASUS/ROG":
+        if lighting and d.get("vendor_key") == "asus":
             self._render_lighting(inner, d, lighting, extra.get("lighting_on", True))
+
+    def _render_razer(self, parent, d, extra):
+        """鼠标控制：DPI 与轮询率"""
+        box = tk.Frame(parent, bg=CARD)
+        box.pack(fill="x", pady=(10, 0))
+
+        dpi = extra.get("dpi") or {}
+        dpi_max = extra.get("dpi_max", 35000)
+        spin_kw = dict(bg="#0b0d11", fg=TEXT, relief="flat", width=7,
+                       font=("Consolas", 9), buttonbackground="#22262f",
+                       insertbackground=TEXT, justify="center")
+
+        tk.Label(box, text="DPI", bg=CARD, fg=MUTED,
+                 font=("Microsoft YaHei UI", 8)).grid(row=0, column=0, sticky="w", padx=(0, 12))
+        x_var = tk.StringVar(value=str(dpi.get("x", 1000)))
+        y_var = tk.StringVar(value=str(dpi.get("y", 1000)))
+        tk.Spinbox(box, from_=100, to=dpi_max, increment=50,
+                   textvariable=x_var, **spin_kw).grid(row=0, column=1, padx=2)
+        tk.Label(box, text="×", bg=CARD, fg=MUTED).grid(row=0, column=2)
+        tk.Spinbox(box, from_=100, to=dpi_max, increment=50,
+                   textvariable=y_var, **spin_kw).grid(row=0, column=3, padx=2)
+        tk.Button(box, text="应用", bg="#1a2b4d", fg=TEXT, relief="flat", padx=12,
+                  command=lambda: self._apply_dpi(d, x_var, y_var)).grid(
+            row=0, column=4, padx=4)
+
+        rates = extra.get("poll_rates") or [125, 500, 1000, 2000, 4000, 8000]
+        poll_var = tk.StringVar(value=str(extra.get("poll_rate") or ""))
+        tk.Label(box, text="轮询率", bg=CARD, fg=MUTED,
+                 font=("Microsoft YaHei UI", 8)).grid(row=1, column=0, sticky="w",
+                                                      padx=(0, 12), pady=(8, 0))
+        ttk.Combobox(box, values=[str(r) for r in rates], textvariable=poll_var,
+                     width=7, state="readonly").grid(row=1, column=1, padx=2, pady=(8, 0))
+        tk.Label(box, text="Hz", bg=CARD, fg=MUTED,
+                 font=("Microsoft YaHei UI", 8)).grid(row=1, column=2, pady=(8, 0))
+        tk.Button(box, text="应用", bg="#1a2b4d", fg=TEXT, relief="flat", padx=12,
+                  command=lambda: self._apply_poll_rate(d, poll_var)).grid(
+            row=1, column=4, padx=4, pady=(8, 0))
+
+    def _apply_dpi(self, d, x_var, y_var):
+        try:
+            x, y = int(x_var.get()), int(y_var.get())
+        except ValueError:
+            messagebox.showerror("写入失败", "DPI 必须是数字")
+            return
+        res = do_control("razer", d["id"], "dpi", {"x": x, "y": y})
+        if not res.get("ok"):
+            messagebox.showerror("写入失败", res.get("error", "未知错误"))
+        self.refresh()
+
+    def _apply_poll_rate(self, d, poll_var):
+        raw = poll_var.get().strip()
+        if not raw.isdigit():
+            return
+        res = do_control("razer", d["id"], "poll_rate", {"hz": int(raw)})
+        if not res.get("ok"):
+            messagebox.showerror("写入失败", res.get("error", "未知错误"))
+        self.refresh()
 
     def _render_lighting(self, parent, d, lighting, on):
         box = tk.Frame(parent, bg=CARD)

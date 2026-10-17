@@ -85,7 +85,7 @@ function cardHTML(d) {
       : `<span class="tag good">已连接</span>`;
 
   let ctrl = "";
-  if (d.vendor === "ASUS/ROG" && d.extra && d.extra.lighting) {
+  if (d.vendor_key === "asus" && d.extra && d.extra.lighting) {
     const l = d.extra.lighting;
     const on = d.extra.lighting_on !== false;
     ctrl = `
@@ -107,6 +107,27 @@ function cardHTML(d) {
         <label>颜色</label>
         <input type="color" id="color-${d.id}" value="#${l.color.map(c => c.toString(16).padStart(2,"0")).join("")}">
         <button onclick="applyLighting('${d.id}')" ${on ? "" : "disabled"}>应用</button>
+      </div>
+    </div>`;
+  }
+
+  if (d.vendor_key === "razer" && d.extra && d.extra.dpi) {
+    const rates = d.extra.poll_rates || [125, 500, 1000, 2000, 4000, 8000];
+    const dpiMax = d.extra.dpi_max || 35000;
+    ctrl += `
+    <div class="controls">
+      <h3>鼠标</h3>
+      <div class="row">
+        <label>DPI</label>
+        <input type="number" id="dpi-${d.id}" value="${d.extra.dpi.x}" min="100" max="${dpiMax}" step="50">
+        <button onclick="applyDpi('${d.id}')">应用</button>
+      </div>
+      <div class="row">
+        <label>轮询率</label>
+        <select id="poll-${d.id}">
+          ${rates.map(r => `<option value="${r}" ${d.extra.poll_rate === r ? "selected" : ""}>${r} Hz</option>`).join("")}
+        </select>
+        <button onclick="applyPoll('${d.id}')">应用</button>
       </div>
     </div>`;
   }
@@ -148,13 +169,12 @@ async function refresh() {
   }
 }
 
-async function postControl(vendor, deviceId, action, payload) {
+async function postControl(vendorKey, deviceId, action, payload) {
   const r = await fetch("/api/control", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      vendor: vendor === "ASUS/ROG" ? "asus" : vendor.toLowerCase(),
-      device_id: deviceId, action, payload
+      vendor: vendorKey, device_id: deviceId, action, payload
     })
   });
   return r.json();
@@ -165,11 +185,26 @@ function applyLighting(id) {
   const bright = document.getElementById("bright-" + id).value;
   const hex = document.getElementById("color-" + id).value;
   const color = [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
-  postControl("ASUS/ROG", id, "lighting", { mode: +mode, brightness: +bright, color });
+  postControl("asus", id, "lighting", { mode: +mode, brightness: +bright, color })
+    .then(() => setTimeout(refresh, 300));
 }
 
 function toggleLighting(id, currentlyOn) {
-  postControl("ASUS/ROG", id, currentlyOn ? "lighting_off" : "lighting_on", {})
+  postControl("asus", id, currentlyOn ? "lighting_off" : "lighting_on", {})
+    .then(() => setTimeout(refresh, 300));
+}
+
+function applyDpi(id) {
+  const x = parseInt(document.getElementById("dpi-" + id).value, 10);
+  postControl("razer", id, "dpi", { x, y: x })
+    .then(r => { if (!r.ok) alert(r.error); })
+    .then(() => setTimeout(refresh, 300));
+}
+
+function applyPoll(id) {
+  const hz = parseInt(document.getElementById("poll-" + id).value, 10);
+  postControl("razer", id, "poll_rate", { hz })
+    .then(r => { if (!r.ok) alert(r.error); })
     .then(() => setTimeout(refresh, 300));
 }
 

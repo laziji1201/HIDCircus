@@ -59,6 +59,14 @@ STATUS_TEXT = {
 # 电量 0–255 映射到 0–100 的分母
 BATTERY_SCALE = 255
 
+# 轮询率的编码是「反比位掩码」：码值 = 8000 / 频率
+POLL_CODE = {8000: 0x01, 4000: 0x02, 2000: 0x04, 1000: 0x08, 500: 0x10, 125: 0x40}
+POLL_BY_CODE = {v: k for k, v in POLL_CODE.items()}
+DEFAULT_POLL_RATES = (125, 500, 1000, 2000, 4000, 8000)
+
+# DPI 边界（该型号 35000）
+DPI_MIN, DPI_MAX = 100, 35000
+
 
 def _xor_crc(buf):
     c = 0
@@ -166,7 +174,7 @@ class RazerProvider(Provider):
         if raw is not None:
             dev.charging = raw[10] == 1
 
-        # DPI：0x04/0x85，arguments[1..4] 是 X/Y 两个 16 位大端
+        # DPI：0x04/0x85，arguments[1..2] 是 X，arguments[3..4] 是 Y（16 位大端）
         raw = self._read(h, 0x04, 0x85, (0x00,) * 7, 0x07)
         if raw is not None:
             dev.extra["dpi"] = {
@@ -174,5 +182,64 @@ class RazerProvider(Provider):
                 "y": (raw[12] << 8) | raw[13],
             }
 
+        # 轮询率：0x00/0xC0，arguments[1] 是反比位掩码，不是频率本身
+        raw = self._read(h, 0x00, 0xC0, (0x00,), 0x01)
+        if raw is not None:
+            dev.extra["poll_rate"] = POLL_BY_CODE.get(raw[10])
+
+        dev.extra["poll_rates"] = list(DEFAULT_POLL_RATES)
+        dev.extra["dpi_max"] = DPI_MAX
+
+    # ---------- 控制 ----------
+
     def control(self, device_id, action, payload):
-        return {"ok": False, "error": "雷蛇控制项尚未实现（规划中）"}
+        try:
+            pid = int(device_id.split(":")[1], 16)
+        except (IndexError, ValueError):
+            return {"ok": False, "error": f"设备 ID 格式不对: {device_id}"}
+        path = self._find_path(pid)
+        if not path:
+            return {"ok": False, "error": "设备未连接"}
+        h = self._open(path)
+        if h is None:
+            return {"ok": False, "error": "设备被占用，无法打开"}
+        try:
+            if action == "dpi":
+                return self._set_dpi(h, payload)
+            if action == "poll_rate":
+                return self._set_poll_rate(h, payload)
+            return {"ok": False, "error": f"未知动作: {action}"}
+        finally:
+            kernel32.CloseHandle(h)
+
+    def _set_dpi(self, h, payload):
+        try:
+            x = int(payload.get("x", 0))
+            y = int(payload.get("y", x))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "DPI 必须是整数"}
+        if not (DPI_MIN <= x <= DPI_MAX and DPI_MIN <= y <= DPI_MAX):
+            return {"ok": False,
+                    "error": f"DPI 必须在 {DPI_MIN}–{DPI_MAX} 之间"}
+        args = [0x00, (x >> 8) & 0xFF, x & 0xFF, (y >> 8) & 0xFF, y & 0xFF, 0x00, 0x00]
+        status, _ = self._xfer(h, 0x04, 0x05, args, 0x07)
+        if status != ST_SUCCESS:
+            return {"ok": False, "error": f"写入被拒（{STATUS_TEXT.get(status, status)}）"}
+        return {"ok": True, "x": x, "y": y}
+
+    def _set_poll_rate(self, h, payload):
+        try:
+            hz = int(payload.get("hz", 0))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "轮询率必须是整数"}
+        code = POLL_CODE.get(hz)
+        if code is None:
+            return {"ok": False,
+                    "error": f"不支持的轮询率: {hz}（可选 {sorted(POLL_CODE, reverse=True)}）"}
+        # 该型号要连发两次，arguments[0] 分别是 0x00 和 0x01
+        for flag in (0x00, 0x01):
+            status, _ = self._xfer(h, 0x00, 0x40, [flag, code], 0x02)
+            if status != ST_SUCCESS:
+                return {"ok": False,
+                        "error": f"写入被拒（{STATUS_TEXT.get(status, status)}）"}
+        return {"ok": True, "hz": hz}

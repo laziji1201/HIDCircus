@@ -65,11 +65,14 @@ def _scan_all():
     out = []
     for p in PROVIDERS:
         try:
-            out.extend(d.to_dict() for d in p.scan())
+            for d in p.scan():
+                item = d.to_dict()
+                item["vendor_key"] = p.VENDOR   # 稳定标识，客户端别靠显示名匹配
+                out.append(item)
         except Exception as e:  # 单个 provider 出错不影响其他
             out.append({"id": f"{p.VENDOR}:error", "name": p.LABEL,
-                        "vendor": p.LABEL, "connected": False,
-                        "note": f"扫描异常: {e}"})
+                        "vendor": p.LABEL, "vendor_key": p.VENDOR,
+                        "connected": False, "note": f"扫描异常: {e}"})
     return out
 
 
@@ -90,9 +93,14 @@ def collect_devices(force=False):
 
 
 def do_control(vendor, device_id, action, payload):
-    for p in PROVIDERS:
-        if p.VENDOR == vendor:
-            return p.control(device_id, action, payload)
+    """执行控制写入。与扫描共用同一把锁，避免写入和扫描抢同一个 HID 句柄。"""
+    with _scan_lock:
+        for p in PROVIDERS:
+            if p.VENDOR == vendor:
+                result = p.control(device_id, action, payload)
+                if result.get("ok"):
+                    _cache["at"] = 0.0  # 状态变了，让下次读走真扫描
+                return result
     return {"ok": False, "error": f"未知厂商: {vendor}"}
 
 
