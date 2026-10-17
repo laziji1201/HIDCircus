@@ -613,6 +613,20 @@
     if (!box) return;
     const data = await api("/api/extensions").catch(() => null);
     if (!data) { box.innerHTML = ""; return; }
+
+    // 顶部状态：内置几家、加载了几个扩展、有没有错误
+    const status = $("#extStatus");
+    if (status) {
+      const vendors = Array.from(new Set((state.devices || [])
+        .map((d) => d.vendor).filter(Boolean)));
+      const loaded = (data.loaded || []).length;
+      const errors = (data.errors || []).length;
+      status.innerHTML = `
+        <span>${esc(t("ext.status.builtin"))}: <b>${esc(vendors.join(" / ") || "—")}</b></span>
+        <span>${esc(t("ext.status.loaded"))}: <b>${loaded}</b></span>
+        <span>${esc(t("ext.status.errors"))}: <b style="color:${errors ? "var(--bad)" : "var(--ok)"}">${errors}</b></span>
+        <span>${esc(t("ext.status.mode"))}: <b>${esc(t("ext.status.modeValue"))}</b></span>`;
+    }
     const rows = [];
     (data.loaded || []).forEach((e) => {
       rows.push(`

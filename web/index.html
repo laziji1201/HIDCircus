@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <title>HIDCircus</title>
-<link rel="icon" type="image/png" href="/assets/favicon.png">
+<link rel="icon" type="image/png" href="/assets/favicon.png?v=2">
 <link rel="stylesheet" href="/web/app.css">
 <script>
   /* 服务端注入的偏好，必须在首帧之前落到 <html> 上，否则会闪一下 */
@@ -87,7 +87,7 @@
 <div class="shell">
   <aside class="rail" id="rail">
     <div class="brand">
-      <img class="mark" src="/assets/favicon.png" alt="HIDCircus">
+      <img class="mark" src="/assets/favicon.png?v=2" alt="HIDCircus">
       <div class="brand-text">
         <strong>HIDCircus</strong>
         <span data-i18n="brand.sub">外设统一控制台</span>
@@ -242,21 +242,43 @@
         <div class="panel">
           <div class="panel-head">
             <h2 data-i18n="settings.ext">扩展</h2>
-            <p data-i18n="settings.ext.sub">自己写的适配文件放在 extensions/ 里，加载后无需重启</p>
+            <p data-i18n="settings.ext.sub">内置三家厂商 + 用 JSON 扩展其它设备</p>
           </div>
+
+          <div class="ext-status" id="extStatus"></div>
+
+          <div class="ext-grid">
+            <div class="ext-box">
+              <b data-i18n="ext.can">扩展能做什么</b>
+              <ul>
+                <li data-i18n="ext.can.read">读取电量、是否充电，以及自定义的附加状态（如灯效开关）</li>
+                <li data-i18n="ext.can.write">发送控制报文：灯效开关、DPI、亮度等（在 JSON 里声明）</li>
+                <li data-i18n="ext.can.ui">声明 control 后，面板会自动渲染按钮 / 数值输入</li>
+              </ul>
+            </div>
+            <div class="ext-box is-muted">
+              <b data-i18n="ext.cannot">目前做不到</b>
+              <ul>
+                <li data-i18n="ext.cannot.eq">EQ、降噪这类需要多步交互的功能（内置 ASUS 实现里有，扩展格式还没覆盖）</li>
+                <li data-i18n="ext.cannot.proto">非 HID 协议（蓝牙私有通道、网络 API）</li>
+                <li data-i18n="ext.cannot.auto">自动发现报文格式 —— 偏移量和量程要自己查/抓包</li>
+              </ul>
+            </div>
+          </div>
+
           <div class="ext-list" id="extList"></div>
+
           <details class="ext-help">
             <summary data-i18n="ext.help">格式速查（自己写 / 让 AI 写都能照着来）</summary>
             <div class="ext-help-body">
-              <p data-i18n="ext.help.intro">把 JSON 放进扩展目录即可生效，不需要重启：
-                文件里声明「怎么认出这台设备」和「发什么报文、读第几字节」。</p>
+              <p data-i18n="ext.help.intro">把 JSON 放进扩展目录即可生效：声明「怎么认出这台设备」和「发什么报文、读第几字节」。</p>
               <pre id="extTemplate" class="ext-template"></pre>
               <ul class="ext-help-list">
-                <li data-i18n="ext.help.match">match：vid 必填，pid 可数组；建议带上 usage_page（同一设备常有多个接口）</li>
-                <li data-i18n="ext.help.transport">transport：feature（发 feature report）/ output（原始 write）/ razer（91 字节 + 自动校验）</li>
-                <li data-i18n="ext.help.value">value：offset 从第几字节取、size 几个字节、scale 乘多少（0-255 换百分比写 0.392）</li>
-                <li data-i18n="ext.help.check">reply_check：先确认这条响应是你发的命令的回包，否则容易读到旧值</li>
-                <li data-i18n="ext.help.debug">读不到时看 logs/app.log，或用 HIDCIRCUS_DEBUG=1 记录每一次请求</li>
+                <li data-i18n="ext.help.match">match：vid 必填，pid 可数组；建议带 usage_page（同一设备常有多个接口）</li>
+                <li data-i18n="ext.help.transport">transport：feature / output / razer（雷蛇 91 字节 + 自动校验）</li>
+                <li data-i18n="ext.help.value">value：offset 第几字节、size 长度、scale 倍率（0-255 换百分比写 0.392）</li>
+                <li data-i18n="ext.help.check">reply_check：先确认回包是你发的那条，否则会读到旧值</li>
+                <li data-i18n="ext.help.debug">读不到时看 logs/app.log；HIDCIRCUS_DEBUG=1 会记录每次请求</li>
               </ul>
               <div class="row-actions">
                 <button class="btn btn-ghost" id="extCopy" data-i18n="ext.copy">复制模板</button>
