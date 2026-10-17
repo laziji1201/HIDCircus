@@ -8,6 +8,41 @@ One control panel for peripherals from multiple vendors. It stays in the tray: o
 
 ![Devices page (dark)](docs/screenshots/devices-dark.png)
 
+## Who is this for
+
+**Built for people whose desk has peripherals from several different vendors.**
+
+The typical setup: an ROG headset (lighting and EQ live in Armoury Crate), a Logitech keyboard
+(battery only in G HUB), a Razer mouse (DPI and polling rate only in Synapse). To read three
+numbers and turn off one light you install three suites — each with its own updater, background
+service and account login — and they fight over the HID channel, so none of them is reliable.
+
+That is exactly the problem HIDCircus solves:
+
+| Your situation | What this does |
+|---|---|
+| 3 vendors = 3 tray icons, 3 background services | One tray icon, all devices on one screen |
+| You only want "how much battery is left" | Left-click the tray, done — no window |
+| You just want the headset lighting off at night | One switch on the panel |
+| Vendor apps fight over HID, readings flap | Talks HID directly, needs no vendor software |
+| You don't want to be locked in | MIT, local server bound to 127.0.0.1 only |
+| You bought an obscure model nobody adapted | Write a JSON extension yourself (or have an AI do it) and export it back |
+
+**Footprint**: one resident Python process (tens of MB) — an order of magnitude smaller than the
+three vendor suites combined. Idle CPU is negligible (10-second polling by default, configurable).
+
+## Who this is *not* for
+
+Being honest is more useful than being flattering:
+
+- **Heavy RGB / macro users** — per-key lighting, macro authoring, layered effects, per-game profile
+  switching: vendor software does far more, this project does none of it
+- **Firmware updates** — not supported
+- **Gamepad owners** — Windows has no unified gamepad battery API; Xbox and DualSense use private
+  reports, currently unsupported
+- **Casual users with a single vendor** — if you own one brand and the vendor app works for you,
+  there is no reason to switch
+
 ## Status
 
 | Vendor | Device | Battery | Control |
