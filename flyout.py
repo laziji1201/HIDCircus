@@ -573,7 +573,7 @@ class Flyout:
             self._rows.append((*web_rect, "web"))
             self._rows.append((*close_rect, "close"))
 
-            for rect, label, active in ((web_rect, "详细设置（网页版）", False),
+            for rect, label, active in ((web_rect, "主面板", False),
                                         (close_rect, "关闭", True)):
                 fill = gdi32.CreateSolidBrush(_rgb(*(c["accent"] if active else c["btn"])))
                 gdi32.SelectObject(hdc, fill)

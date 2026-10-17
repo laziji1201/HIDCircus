@@ -891,7 +891,7 @@ def main():
         _icon = Tray(make_icon(None), APP_NAME,
                      [("打开面板", lambda *_: threading.Thread(
                          target=show_flyout, daemon=True).start()),
-                      ("详细设置（网页版）", on_open),
+                      ("主面板", on_open),
                       ("刷新电量", on_refresh),
                       ("退出", quit_app)],
                      on_click=lambda: threading.Thread(
