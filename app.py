@@ -578,6 +578,14 @@ def open_panel(port):
     name, browser = find_browser()
     log(f"可用浏览器: {name or '无'}")
 
+    # 低权限进程拉起来的浏览器也是低权限，页面加载不出来；
+    # 更糟的是会撞上"已有以提升权限运行的 Edge"，弹一堆对话框。
+    # 所以这种情况下干脆不拉浏览器，直接把地址给用户。
+    if _low_integrity:
+        log(f"低权限会话：不尝试自动开窗，请手动访问 {url}")
+        threading.Thread(target=warn_low_integrity, daemon=True).start()
+        return False
+
     if browser:
         for profile in _profile_candidates():
             since = time.time()
