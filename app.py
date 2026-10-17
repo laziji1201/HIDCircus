@@ -578,7 +578,7 @@ def open_panel(port):
     name, browser = find_browser()
     log(f"可用浏览器: {name or '无'}")
 
-    if browser and not _low_integrity:
+    if browser:
         for profile in _profile_candidates():
             since = time.time()
             fresh = not profile.exists()
@@ -608,6 +608,9 @@ def open_panel(port):
         log(f"面板已在默认浏览器打开: {url}")
         return True
     log(f"面板没能自动打开，请手动访问 {url}")
+    # 到头来还是打不开：至少让用户看到一句人话，而不是双击后什么都没发生
+    if _low_integrity:
+        threading.Thread(target=warn_low_integrity, daemon=True).start()
     return False
 
 
@@ -821,18 +824,8 @@ def main():
     log(f"进程完整性: {INTEGRITY_LEVELS.get(level, hex(level) if level else '未知')}")
     if level is not None and level < 0x2000:
         _low_integrity = True
-        marker = ROOT / ".runtime" / "low-integrity-warned"
-        if not marker.exists():
-            log("警告：进程权限被降级，托盘与无边框窗口都不可能工作（弹窗提示一次，"
-                "之后不再打扰；删除 .runtime/low-integrity-warned 可重置）")
-            try:
-                marker.parent.mkdir(exist_ok=True)
-                marker.write_text("1", encoding="utf-8")
-            except OSError:
-                pass
-            threading.Thread(target=warn_low_integrity, daemon=True).start()
-        else:
-            log("警告：仍是低权限运行，托盘与无边框窗口不可用（已提示过，不再弹窗）")
+        # 不再"提示一次就装死"：照样尝试开面板，失败后由 open_panel 兜底提示
+        log("注意：进程权限被降级，托盘图标不可用；面板会尝试用浏览器打开")
 
     log(f"{APP_NAME} 启动")
 
@@ -843,10 +836,7 @@ def main():
     running = find_running_port()
     if running:
         log(f"已有实例在运行（端口 {running}），只负责把面板打开")
-        if _low_integrity:
-            log(f"当前是低权限进程，跳过自动开窗，请手动访问 http://{HOST}:{running}")
-        else:
-            open_panel(running)
+        open_panel(running)      # 低权限也照样试，失败在 open_panel 里兜底提示
         return
     if not first:
         log("检测到实例标记但找不到服务，继续启动")

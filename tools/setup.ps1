@@ -6,11 +6,13 @@ param([string]$Mode = "install", [switch]$Highest)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $taskName = 'HIDCircus'
+$panelTask = 'HIDCircusPanel'
 $desktop = [Environment]::GetFolderPath('Desktop')
 $shortcut = Join-Path $desktop 'HIDCircus.lnk'
 
 function Remove-Everything {
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $panelTask -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Item $shortcut -ErrorAction SilentlyContinue
     Write-Host '[OK] 已取消开机自启并删除桌面快捷方式'
 }
@@ -29,11 +31,11 @@ foreach ($candidate in @((Join-Path $root 'HIDCircus.exe'), (Join-Path $root 'di
 
 if ($exe) {
     $launchExe = $exe
-    $launchArgs = '--silent'
+    $appArgs = ''
     $workDir = Split-Path -Parent $exe
 } elseif (Test-Path $pythonw) {
     $launchExe = $pythonw
-    $launchArgs = '"' + (Join-Path $root 'app.py') + '" --silent'
+    $appArgs = '"' + (Join-Path $root 'app.py') + '"'
     $workDir = $root
 } else {
     Write-Host '[!] 既没找到 HIDCircus.exe，也没找到 .venv\Scripts\pythonw.exe'
@@ -41,10 +43,11 @@ if ($exe) {
     exit 1
 }
 
-Write-Host "启动方式: $launchExe"
+Write-Host "启动方式: $launchExe $appArgs"
 
 try {
-    $action = New-ScheduledTaskAction -Execute $launchExe -Argument $launchArgs -WorkingDirectory $workDir
+    # 登录自启：静默进托盘
+    $action = New-ScheduledTaskAction -Execute $launchExe -Argument "$appArgs --silent" -WorkingDirectory $workDir
     $trigger = New-ScheduledTaskTrigger -AtLogOn
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'HIDCircus 外设控制台（托盘常驻）' -Force | Out-Null
@@ -60,9 +63,9 @@ try {
 try {
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut($shortcut)
-    $lnk.TargetPath = $launchExe
-    $lnk.Arguments = $launchArgs.Replace('--silent', '--panel')
-    $lnk.WorkingDirectory = $workDir
+    $lnk.TargetPath = Join-Path $root 'tools\launch.bat'
+    $lnk.Arguments = ''
+    $lnk.WorkingDirectory = $root
     $lnk.Description = 'HIDCircus 外设控制台'
     $icon = Join-Path $root 'assets\icon.ico'
     if (Test-Path $icon) { $lnk.IconLocation = $icon }
