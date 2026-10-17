@@ -796,6 +796,21 @@
     }, Math.max(3, seconds) * 1000);
   }
 
+  /* ---------------- 心跳 ----------------
+     桌面端靠它判断"面板还开着"，没有托盘时决定进程要不要退出。
+     任何浏览器、有无边框都不影响。 */
+
+  function startHeartbeat() {
+    const ping = () => {
+      fetch("/api/ping", { method: "POST", keepalive: true }).catch(() => {});
+    };
+    ping();
+    setInterval(ping, 4000);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") ping();
+    });
+  }
+
   /* ---------------- 启动 ---------------- */
 
   async function boot() {
@@ -803,6 +818,7 @@
       document.body.classList.add("rail-collapsed");
     }
     wire();
+    startHeartbeat();
     if (location.hash === "#settings") state.page = "settings";
     try {
       await loadSettings();

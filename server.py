@@ -8,6 +8,7 @@
 """
 
 import json
+import os
 import sys
 import threading
 import time
@@ -51,7 +52,7 @@ DEFAULT_SETTINGS = {
 }
 
 # 运行状态（app.py 启动后回填，供页面显示托盘是否可用）
-STATUS = {"tray": None, "port": None, "log": ""}
+STATUS = {"tray": None, "port": None, "log": "", "last_ping": 0.0}
 
 _scan_lock = threading.Lock()
 _cache = {"at": 0.0, "devices": []}
@@ -163,6 +164,19 @@ IMAGE_EXT = {"image/png": ".png", "image/jpeg": ".jpg",
              "image/webp": ".webp", "image/gif": ".gif"}
 
 
+def _debug_log(msg):
+    """请求日志，只在 HIDCIRCUS_DEBUG=1 时写（排查"浏览器到底连没连上"用）。"""
+    if os.environ.get("HIDCIRCUS_DEBUG") != "1":
+        return
+    try:
+        p = DATA_DIR / "logs" / "requests.log"
+        p.parent.mkdir(exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
+
+
 class LocalServer(ThreadingHTTPServer):
     """本地 HTTP 服务。
 
@@ -230,6 +244,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         route = urlparse(self.path).path
+        _debug_log(f"GET {self.path} ua={self.headers.get('User-Agent', '-')[:40]}")
 
         if route in ("/", "/index.html"):
             self._serve_index()
@@ -260,6 +275,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         route = urlparse(self.path).path
+        _debug_log(f"POST {self.path}")
         raw = self._read_body()
 
         if route == "/api/control":
@@ -289,6 +305,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "/api/background":
             self._save_background(raw)
+            return
+
+        if route == "/api/ping":
+            STATUS["last_ping"] = time.time()
+            self._json({"ok": True})
             return
 
         if route == "/api/refresh":
