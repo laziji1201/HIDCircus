@@ -38,6 +38,10 @@ if (-not (Test-Path $exe)) {
 # 扩展目录：把文档和示例复制到产物旁边（用户自己写的 JSON 也放这里）
 New-Item -ItemType Directory -Force 'dist\HIDCircus\extensions' | Out-Null
 Copy-Item 'extensions\README.md' 'dist\HIDCircus\extensions\README.md' -Force
+Copy-Item 'README.md' 'dist\HIDCircus\README.md' -Force
+Copy-Item 'README.en-US.md' 'dist\HIDCircus\README.en-US.md' -Force
+Copy-Item 'CHANGELOG.md' 'dist\HIDCircus\CHANGELOG.md' -Force
+Copy-Item 'LICENSE' 'dist\HIDCircus\LICENSE' -Force
 New-Item -ItemType Directory -Force 'dist\HIDCircus\extensions\examples' | Out-Null
 Copy-Item 'extensions\examples\*.json' 'dist\HIDCircus\extensions\examples\' -Force
 # 开机自启脚本要一起分发（exe 内不包含 tools/）
