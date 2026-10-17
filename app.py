@@ -15,6 +15,7 @@ import queue
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 import pystray
@@ -35,6 +36,31 @@ _root = None
 _icon = None
 _ui = None
 _ui_queue = queue.Queue()
+
+
+def log_dir():
+    """打包后 _MEIPASS 是临时目录，日志要落在 exe 旁边。"""
+    base = (Path(sys.executable).resolve().parent
+            if getattr(sys, "frozen", False) else ROOT)
+    d = base / "logs"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+LOG_FILE = log_dir() / "app.log"
+
+
+def log(msg):
+    """pythonw 没有控制台，出错只能靠文件留痕。"""
+    try:
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > 512 * 1024:
+            LOG_FILE.write_text("", encoding="utf-8")
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with LOG_FILE.open("a", encoding="utf-8") as f:
+            f.write(f"[{stamp}] {msg}\n")
+    except Exception:
+        pass
+
 
 
 def make_icon(battery):
@@ -135,9 +161,27 @@ def quit_app(icon=None, item=None):
 def main():
     global _root, _icon, _ui
 
+    # 未捕获异常一律落盘，别让它随 pythonw 一起消失
+    def _hook(exc_type, exc, tb):
+        log("未捕获异常: " + "".join(traceback.format_exception(exc_type, exc, tb)))
+
+    def _thread_hook(args):
+        log(f"线程 {args.thread.name if args.thread else '?'} 异常: "
+            + "".join(traceback.format_exception(
+                args.exc_type, args.exc_value, args.exc_traceback)))
+
+    sys.excepthook = _hook
+    threading.excepthook = _thread_hook
+    log(f"{APP_NAME} 启动")
+
     # 本地 API 服务（浏览器也能直接访问）
-    server, port = create_server()
+    try:
+        server, port = create_server()
+    except OSError as e:
+        log(f"HTTP 服务启动失败: {e}")
+        raise
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    log(f"HTTP 面板: http://{HOST}:{port}")
     print(f"HTTP 面板: http://{HOST}:{port}")
 
     _root = tk.Tk()
@@ -146,12 +190,7 @@ def main():
 
     # 托盘（当前环境可能不允许 UI 操作，失败则退化为直接显示窗口）
     tray_ok = False
-    tray_error = []
 
-    def _thread_hook(args):
-        tray_error.append(args.exc_value)
-
-    threading.excepthook = _thread_hook
     try:
         _icon = pystray.Icon(
             "hidcircus", make_icon(None), APP_NAME,
@@ -163,16 +202,16 @@ def main():
         )
         _icon.run_detached()
         time.sleep(1.2)
-        # pystray 内部线程抛异常时 _hwnd 可能已赋值，必须另外检查异常
-        tray_ok = bool(getattr(_icon, "_hwnd", None)) and not tray_error
-        if not tray_ok:
+        # pystray 内部线程抛异常时 _hwnd 可能已赋值，所以还要看日志里有没有线程异常
+        tray_ok = bool(getattr(_icon, "_hwnd", None))
+        if tray_ok:
+            log("托盘已就绪")
+        else:
+            log("托盘未建立（_hwnd 为空），退化为直接显示窗口")
             _icon = None
     except Exception as e:
-        print(f"托盘不可用: {e}")
+        log(f"托盘不可用: {e}")
         _icon = None
-    finally:
-        threading.excepthook = threading.__excepthook__ if hasattr(
-            threading, "__excepthook__") else threading.excepthook
 
     if tray_ok:
         _root.protocol("WM_DELETE_WINDOW", hide_window)
@@ -183,6 +222,7 @@ def main():
         threading.Thread(target=poll, daemon=True).start()
 
     _root.mainloop()
+    log(f"{APP_NAME} 退出")
 
 
 if __name__ == "__main__":

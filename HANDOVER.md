@@ -163,8 +163,8 @@ buf[89]     校验
 9. razer/logitech 服务以 SYSTEM 权限运行，普通用户停不掉
 10. Windows 不暴露 PELTA 的 `BatteryLevel`
 11. pywebview + pythonnet 在 Python 3.13 加载失败；coreclr 模式又缺 `System.Windows.Forms` → 放弃 WebView，改 tkinter
-12. pystray 在受限会话报 `WinError 5`（ChangeWindowMessageFilterEx），且 `_hwnd` 在抛异常前已赋值，不能用 `_hwnd` 判断托盘是否可用，要挂 `threading.excepthook`
-13. DSH 会话启动的 GUI 进程，窗口不出现在桌面（最小 tkinter 测试也复现）；但 `tkinter.Tk()` 能正常构造，可以拿来做冒烟测试。GUI 视觉验证必须在用户自己的桌面会话做
+12. pystray 在受限令牌下报 `WinError 5`（`ChangeWindowMessageFilterEx` 被拒），且 `_hwnd` 在抛异常前已赋值，不能用 `_hwnd` 单独判断托盘是否可用，要挂 `threading.excepthook` 并落盘
+13. **不要用 `Start-Process` 返回的 PID 去查 `MainWindowHandle` 来判断 GUI 有没有起来**。`.venv\Scripts\python.exe` 在 Windows 上是转发器，真正跑代码的是它的子进程，窗口挂在子进程上，所以按返回的 PID 查永远是 0 —— 这会让人误判成"DSH 会话里 GUI 不显示"。实测窗口是正常出现在用户桌面上的，正确做法是用 `EnumWindows` 按标题找窗口（或查子进程）。同理，`Stop-Process` 杀掉转发器，真正的解释器可能还活着，要按命令行匹配着杀
 14. **雷蛇 CRC 偏移一位会让所有命令返回 failure**，见 §5.3。排查顺序：先怀疑自己的 CRC/偏移，再怀疑厂商软件占用
 15. 雷蛇同样要确认打开的是 `MI_00` 那个集合，其它集合 feature 长度为 0，`SetFeature` 会失败或设备不回话
 16. 雷蛇 `SetFeature` 后立刻 `GetFeature` 会偶发读到上一次的响应，固定等 80ms
@@ -176,9 +176,15 @@ buf[89]     校验
 
 ## 7. 待验证（务必先做）
 
+**看 `logs\app.log` 就知道结果**，每次启动会写：HTTP 端口、托盘是否就绪、任何未捕获异常。
+
 1. 双击 `run.bat`，看托盘图标是否出现、窗口是否打开
 2. 点托盘图标能否唤起窗口；关闭窗口后是否还在托盘；右键菜单「刷新」是否生效
-3. 若托盘不可用，程序会退化为"直接显示窗口、关闭即退出"
+3. 若托盘不可用，日志会写「托盘未建立」并附异常，程序自动退化为"直接显示窗口、关闭即退出"
+
+> 注意：**在 DSH 会话里启动的这个程序，托盘一定是失败的**。DSH 派生的进程带受限令牌（AppContainer），
+> pystray 调 `ChangeWindowMessageFilterEx` 会被拒（`WinError 5`）。这是环境限制，不是代码 bug。
+> 用户自己双击 `run.bat` 拿到的是普通令牌，托盘才有机会正常。所以托盘只能由用户亲自验。
 
 ## 8. 打包
 
