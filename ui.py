@@ -36,8 +36,9 @@ def battery_color(p):
 
 
 class HIDCircusUI:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, api_url: str = ""):
         self.root = root
+        self.api_url = api_url
         self.root.title("HIDCircus")
         self.root.geometry("960x760")
         self.root.minsize(720, 520)
@@ -45,6 +46,8 @@ class HIDCircusUI:
 
         self.devices = []
         self._scanning = False
+        # 用户挑的颜色存在这里，不要每次刷新都重置（否则自动刷新会吞掉选择）
+        self._picked = {}
 
         self._build_header()
         self._build_body()
@@ -85,9 +88,14 @@ class HIDCircusUI:
         scroll.pack(side="right", fill="y")
 
     def _build_footer(self):
-        self.status = tk.Label(self.root, text="", bg=BG, fg=MUTED,
+        foot = tk.Frame(self.root, bg=BG)
+        foot.pack(fill="x", padx=16, pady=(4, 10))
+        self.status = tk.Label(foot, text="", bg=BG, fg=MUTED,
                                font=("Microsoft YaHei UI", 8), anchor="w")
-        self.status.pack(fill="x", padx=16, pady=(4, 10))
+        self.status.pack(side="left")
+        if self.api_url:
+            tk.Label(foot, text=f"浏览器面板 {self.api_url}", bg=BG, fg=MUTED,
+                     font=("Microsoft YaHei UI", 8)).pack(side="right")
 
     # ---------- 数据 ----------
 
@@ -163,6 +171,7 @@ class HIDCircusUI:
         bar.bind("<Configure>", draw_bar)
 
         # 状态行
+        extra = d.get("extra") or {}
         note = d.get("note", "")
         charging = d.get("charging")
         if note:
@@ -176,8 +185,16 @@ class HIDCircusUI:
         tk.Label(inner, text=state, bg=CARD, fg=color,
                  font=("Microsoft YaHei UI", 8)).pack(anchor="w")
 
+        # 只读附加信息（雷蛇 DPI 等）
+        facts = []
+        dpi = extra.get("dpi")
+        if dpi:
+            facts.append(f"DPI {dpi.get('x', '?')} × {dpi.get('y', '?')}")
+        if facts:
+            tk.Label(inner, text=" · ".join(facts), bg=CARD, fg=MUTED,
+                     font=("Microsoft YaHei UI", 8)).pack(anchor="w", pady=(2, 0))
+
         # ROG 灯效控制
-        extra = d.get("extra") or {}
         lighting = extra.get("lighting")
         if lighting and d.get("vendor") == "ASUS/ROG":
             self._render_lighting(inner, d, lighting, extra.get("lighting_on", True))
@@ -202,10 +219,8 @@ class HIDCircusUI:
                  length=150, showvalue=True).grid(row=0, column=2, padx=8)
 
         # 颜色
-        self._picked = {}
         color = lighting.get("color", [255, 0, 0])
-        hexcolor = "#%02x%02x%02x" % tuple(color)
-        self._picked[d["id"]] = hexcolor
+        hexcolor = self._picked.setdefault(d["id"], "#%02x%02x%02x" % tuple(color))
         swatch = tk.Button(box, text="颜色", bg=hexcolor, fg="white", relief="flat",
                            width=6, command=lambda: self._pick_color(d["id"], swatch))
         swatch.grid(row=0, column=3, padx=4)

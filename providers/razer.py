@@ -1,37 +1,63 @@
-"""雷蛇 provider（Viper V3 Pro 等 91 字节 feature report 设备）。
+"""雷蛇 provider（Viper V3 Pro 等使用 91 字节 feature report 的设备）。
 
-协议来源：OpenRazer / viper-tray 的公开观察结果；本文件为独立实现。
+协议来源：OpenRazer / viper-tray 等公开项目的观察结果；本文件为独立实现，
+未复制其代码，仅复现通信行为。
 
-要点：
-- 鼠标集合必须用 dwDesiredAccess=0 打开，绕过 mouclass 独占锁
-- 报文 91 字节：[0]=report id, [1]=状态, [2]=事务ID, [7]=命令类, [8]=命令
-- 电量命令：命令类 0x07 + 命令 0x80，结果在 arguments[1]（offset 10）
+要点（每条都是踩出来的，改代码前先看）：
+- 鼠标集合必须用 dwDesiredAccess=0 打开，绕过 mouclass 的独占锁
+- 只有「鼠标集合」（usage_page 0x0001 / usage 0x0002，通常是 MI_00）才带
+  91 字节 feature report，其它集合的 feature 长度是 0
+- 缓冲区第一字节是 report ID，真正的 90 字节报文从 buf[1] 开始：
+    buf[1]  状态（请求填 0）
+    buf[2]  事务 ID
+    buf[3:5]  剩余包数
+    buf[5]  协议类型
+    buf[6]  数据长度 data_size
+    buf[7]  命令类
+    buf[8]  命令
+    buf[9:89]  参数 80 字节
+    buf[89] 校验（XOR）
+- **校验是「对 buf[3:89] 做 XOR，结果写 buf[89]」**。写成 buf[2:88] 或写到
+  buf[88]，设备会对每条命令都回 `0x03 failure`，看起来像被 Synapse 占用，
+  实际上是自己算错了 CRC。
+- 发完要等约 80ms 再 GetFeature，否则偶发读到上一次的响应。
 """
 
 import ctypes
+import time
 from ctypes import wintypes as w
 
 from .base import Device, Provider
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-hid = ctypes.WinDLL("hid", use_last_error=True)
+hidlib = ctypes.WinDLL("hid", use_last_error=True)
 HANDLE = ctypes.c_void_p
 
 kernel32.CreateFileW.restype = HANDLE
 kernel32.CreateFileW.argtypes = [ctypes.c_wchar_p, w.DWORD, w.DWORD,
                                  ctypes.c_void_p, w.DWORD, w.DWORD, HANDLE]
 kernel32.CloseHandle.argtypes = [HANDLE]
-hid.HidD_SetFeature.restype = w.BOOL
-hid.HidD_SetFeature.argtypes = [HANDLE, ctypes.c_void_p, w.ULONG]
-hid.HidD_GetFeature.restype = w.BOOL
-hid.HidD_GetFeature.argtypes = [HANDLE, ctypes.c_void_p, w.ULONG]
+hidlib.HidD_SetFeature.restype = w.BOOL
+hidlib.HidD_SetFeature.argtypes = [HANDLE, ctypes.c_void_p, w.ULONG]
+hidlib.HidD_GetFeature.restype = w.BOOL
+hidlib.HidD_GetFeature.argtypes = [HANDLE, ctypes.c_void_p, w.ULONG]
 
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 OPEN_EXISTING = 3
 SHARE_RW = 0x03
 PKT = 91
+DEFAULT_TXN = 0x1F
+FEATURE_DELAY = 0.08
 
-STATUS = {0: "new", 1: "busy", 2: "success", 3: "failure", 4: "unsupported", 5: "timeout"}
+# 响应状态字节
+ST_NEW, ST_BUSY, ST_SUCCESS, ST_FAILURE, ST_UNSUPPORTED, ST_TIMEOUT = range(6)
+STATUS_TEXT = {
+    ST_NEW: "new", ST_BUSY: "busy", ST_SUCCESS: "success",
+    ST_FAILURE: "failure", ST_UNSUPPORTED: "unsupported", ST_TIMEOUT: "timeout",
+}
+
+# 电量 0–255 映射到 0–100 的分母
+BATTERY_SCALE = 255
 
 
 def _xor_crc(buf):
@@ -52,36 +78,59 @@ class RazerProvider(Provider):
     def __init__(self, hid_module):
         self.hid = hid_module
 
-    def _find_path(self, pid):
-        for d in self.hid.enumerate(0x1532, pid):
-            # 鼠标集合：usage_page 0x0001 / usage 0x0002
-            if d.get("usage_page") == 0x0001 and d.get("usage") == 0x0002:
-                return d["path"]
-        return None
+    # ---------- 底层 ----------
 
-    def _query(self, path, cmd_class, cmd_id, transaction=0x1F):
+    def _find_path(self, pid):
+        """取带 91 字节 feature report 的鼠标集合。"""
+        fallback = None
+        for d in self.hid.enumerate(0x1532, pid):
+            if d.get("usage_page") == 0x0001 and d.get("usage") == 0x0002:
+                # MI_00 才是真正承载 feature report 的那个，先记下再确认
+                if d.get("interface_number") == 0:
+                    return d["path"]
+                fallback = fallback or d["path"]
+        return fallback
+
+    def _open(self, path):
         if isinstance(path, bytes):
             path = path.decode("utf-8", "ignore")
         h = kernel32.CreateFileW(path, 0, SHARE_RW, None, OPEN_EXISTING, 0, None)
         if not h or h == INVALID_HANDLE_VALUE:
-            return None, "无法打开设备"
-        try:
-            req = bytearray(PKT)
-            req[0] = 0x00
-            req[1] = 0x00
-            req[2] = transaction
-            req[6] = 0x00
-            req[7] = cmd_class
-            req[8] = cmd_id
-            req[88] = _xor_crc(req[2:88])
-            if not hid.HidD_SetFeature(h, bytes(req), PKT):
-                return None, "SetFeature 失败"
-            resp = ctypes.create_string_buffer(PKT)
-            if not hid.HidD_GetFeature(h, resp, PKT):
-                return None, "GetFeature 失败"
-            return resp.raw, None
-        finally:
-            kernel32.CloseHandle(h)
+            return None
+        return h
+
+    def _xfer(self, h, cmd_class, cmd_id, args=(), data_size=0, txn=DEFAULT_TXN):
+        """发一条命令，返回 (状态码, 响应字节串)。状态不是 success 时字节串可能是 None。"""
+        req = bytearray(PKT)
+        req[2] = txn
+        req[6] = data_size
+        req[7] = cmd_class
+        req[8] = cmd_id
+        for i, a in enumerate(args):
+            req[9 + i] = a & 0xFF
+        req[89] = _xor_crc(req[3:89])
+
+        if not hidlib.HidD_SetFeature(h, bytes(req), PKT):
+            return ST_FAILURE, None
+        time.sleep(FEATURE_DELAY)
+        resp = ctypes.create_string_buffer(PKT)
+        if not hidlib.HidD_GetFeature(h, resp, PKT):
+            return ST_FAILURE, None
+        raw = resp.raw
+        return raw[1], raw
+
+    def _read(self, h, cmd_class, cmd_id, args=(), data_size=0, retries=2):
+        """只读命令，忙时重试；返回响应参数区的前若干字节，失败返回 None。"""
+        for attempt in range(retries):
+            status, raw = self._xfer(h, cmd_class, cmd_id, args, data_size)
+            if status == ST_SUCCESS:
+                return raw
+            if status != ST_BUSY:
+                break
+            time.sleep(0.05 * (attempt + 1))
+        return None
+
+    # ---------- 对外接口 ----------
 
     def scan(self):
         devices = []
@@ -91,17 +140,39 @@ class RazerProvider(Provider):
                 continue
             dev = Device(id=f"razer:{pid:04x}", name=name,
                          vendor=self.LABEL, kind=kind)
-            resp, err = self._query(path, 0x07, 0x80)
-            if resp is None:
-                dev.note = err or "读取失败"
-            else:
-                status = resp[1]
-                if status == 0x02:
-                    dev.battery = round(resp[10] * 100 / 255)
-                else:
-                    dev.note = f"设备返回 {STATUS.get(status, hex(status))}（可能被 Synapse 占用）"
             devices.append(dev)
+            h = self._open(path)
+            if h is None:
+                dev.note = "设备被占用，无法打开"
+                continue
+            try:
+                self._fill(h, dev)
+            finally:
+                kernel32.CloseHandle(h)
         return devices
+
+    def _fill(self, h, dev):
+        # 电量：0x07/0x80，参数 [0,0]，结果在 arguments[1]
+        raw = self._read(h, 0x07, 0x80, (0x00, 0x00), 0x02)
+        if raw is None:
+            dev.note = "电量读取被拒（设备忙或固件不支持）"
+            return
+        value = raw[10]
+        if 0 < value <= BATTERY_SCALE:
+            dev.battery = round(value * 100 / BATTERY_SCALE)
+
+        # 充电状态：0x07/0x84，arguments[1] == 1 表示充电中
+        raw = self._read(h, 0x07, 0x84, (0x00, 0x00), 0x02)
+        if raw is not None:
+            dev.charging = raw[10] == 1
+
+        # DPI：0x04/0x85，arguments[1..4] 是 X/Y 两个 16 位大端
+        raw = self._read(h, 0x04, 0x85, (0x00,) * 7, 0x07)
+        if raw is not None:
+            dev.extra["dpi"] = {
+                "x": (raw[10] << 8) | raw[11],
+                "y": (raw[12] << 8) | raw[13],
+            }
 
     def control(self, device_id, action, payload):
         return {"ok": False, "error": "雷蛇控制项尚未实现（规划中）"}

@@ -10,7 +10,7 @@
 |---|---|---|---|
 | ASUS/ROG | ROG PELTA | ✅ | 灯效 / EQ / 降噪（灯效已实测） |
 | Logitech | PRO X TKL | ✅ | 规划中 |
-| Razer | Viper V3 Pro | 🟡 通道通，命令待调 | 规划中 |
+| Razer | Viper V3 Pro | ✅ | 规划中（DPI 已可读） |
 
 ## 运行
 
@@ -27,7 +27,7 @@ py -3.10 -m venv .venv
 
 - 系统托盘出现圆环图标，中间是当前最低电量
 - 左键点图标 → 打开主面板
-- 右键 → 打开面板 / 退出
+- 右键 → 打开面板 / 刷新 / 退出
 - 关闭主窗口只是隐藏，托盘继续常驻
 
 > 若当前环境不允许托盘，程序会自动退化为「直接显示窗口、关闭即退出」。
@@ -51,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 app.py          桌面入口：托盘 + tkinter 窗口 + 启动本地服务
 ui.py           tkinter 主界面（设备卡片 / 电量条 / 灯效控制）
-server.py       本地 HTTP 服务（桌面与浏览器共用）
+server.py       本地 HTTP 服务（桌面与浏览器共用，串行扫描 + 短时缓存）
 providers/
   base.py       统一设备模型 + Provider 基类
   asus.py       ROG 耳机（0xCC 报文，0x12 读 / 0x41·0x51 写）
