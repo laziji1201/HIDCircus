@@ -1,4 +1,4 @@
-# 打包 HIDCircus 为便携版（onedir）
+﻿# 打包 HIDCircus 为便携版（onedir）
 # 用法：powershell -ExecutionPolicy Bypass -File build.ps1
 # 产物：dist\HIDCircus\HIDCircus.exe 以及 dist\HIDCircus-win-x64.zip
 #
@@ -35,6 +35,11 @@ if (-not (Test-Path $exe)) {
     exit 1
 }
 
+# 扩展目录：把文档和示例复制到产物旁边（用户自己写的 JSON 也放这里）
+New-Item -ItemType Directory -Force 'dist\HIDCircus\extensions' | Out-Null
+Copy-Item 'extensions\README.md' 'dist\HIDCircus\extensions\README.md' -Force
+New-Item -ItemType Directory -Force 'dist\HIDCircus\extensions\examples' | Out-Null
+Copy-Item 'extensions\examples\*.json' 'dist\HIDCircus\extensions\examples\' -Force
 # 开机自启脚本要一起分发（exe 内不包含 tools/）
 New-Item -ItemType Directory -Force 'dist\HIDCircus\tools' | Out-Null
 Copy-Item 'tools\setup.ps1' 'dist\HIDCircus\tools\setup.ps1' -Force
