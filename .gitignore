@@ -23,3 +23,7 @@ config.json.tmp
 assets/background/
 .runtime/
 
+
+# 临时测试脚本
+.tmp_*
+
