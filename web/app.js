@@ -13,10 +13,28 @@
     lastUpdate: null,
     timer: null,
     firstLoad: true,
+    pendingRender: false,
   };
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+  /* 出错时不要白屏：把错误怼到页面上，省得只能靠日志猜 */
+  function showFatal(msg) {
+    let box = document.getElementById("fatalBox");
+    if (!box) {
+      box = document.createElement("pre");
+      box.id = "fatalBox";
+      document.body.appendChild(box);
+    }
+    box.textContent = String(msg).slice(0, 800);
+    box.hidden = false;
+  }
+  window.addEventListener("error", (e) => showFatal(`${e.message}  @${e.filename || "?"}:${e.lineno}`));
+  window.addEventListener("unhandledrejection", (e) => {
+    const r = e.reason;
+    showFatal("Promise: " + (r && (r.stack || r.message) || r));
+  });
 
   /* ---------------- 小工具 ---------------- */
 
@@ -329,13 +347,30 @@
       </article>`;
   }
 
+  function ordered(list) {
+    const order = (state.settings && state.settings.device_order) || [];
+    if (!order.length) return list;
+    const rank = new Map(order.map((id, i) => [id, i]));
+    return list.slice().sort((a, b) => {
+      const ra = rank.has(a.id) ? rank.get(a.id) : 1e9;
+      const rb = rank.has(b.id) ? rank.get(b.id) : 1e9;
+      return ra - rb;
+    });
+  }
+
   function renderDevices() {
     const grid = $("#deviceGrid");
-    const list = state.devices || [];
+    if (drag.active) {                 // 拖拽过程中别重排，等放手再刷
+      state.pendingRender = true;
+      return;
+    }
+    const list = ordered(state.devices || []);
     renderStat(list);
     grid.innerHTML = list.map(cardHTML).join("");
     if (state.page === "settings") renderSettingsState();
     $("#emptyState").hidden = list.length > 0;
+    const hint = $("#dragHint");
+    if (hint) hint.hidden = list.length < 2;
   }
 
   function renderStat(list) {
@@ -373,6 +408,16 @@
     const vendors = Array.from(new Set((state.devices || []).map((d) => d.vendor))).filter(Boolean);
     $("#aboutProviders").textContent = vendors.length ? vendors.join(" / ") : "—";
     $("#aboutUrl").textContent = location.origin;
+    api("/api/status").then((st) => {
+      const tray = $("#aboutTray");
+      if (tray && st) {
+        if (st.tray === true) { tray.textContent = t("about.trayOk"); tray.style.color = "var(--ok)"; }
+        else if (st.tray === false) { tray.textContent = t("about.trayOff"); tray.style.color = "var(--warn)"; }
+        else tray.textContent = "—";
+      }
+      const logEl = $("#aboutLog");
+      if (logEl && st && st.log) logEl.textContent = st.log.replace(/^.*[\\/]/, "logs/");
+    }).catch(() => {});
   }
 
   /* ---------------- 提示 ---------------- */
@@ -391,9 +436,96 @@
     }, 2600);
   }
 
+  /* ---------------- 拖拽排序（长按 320ms 进入） ---------------- */
+
+  const drag = { active: false, card: null, ph: null, offX: 0, offY: 0,
+                 timer: null, sx: 0, sy: 0 };
+
+  function gridCards() {
+    return Array.from($("#deviceGrid").children).filter((el) => el.matches(".card"));
+  }
+
+  function cancelArm() {
+    if (drag.timer) { clearTimeout(drag.timer); drag.timer = null; }
+    if (drag.card) drag.card.classList.remove("is-armed");
+    drag.card = null;
+  }
+
+  function beginDrag() {
+    const card = drag.card;
+    if (!card || drag.active) return;
+    drag.timer = null;
+    drag.active = true;
+
+    const rect = card.getBoundingClientRect();
+    const ph = document.createElement("div");
+    ph.className = "card-placeholder";
+    ph.style.width = `${rect.width}px`;
+    ph.style.height = `${rect.height}px`;
+    card.after(ph);
+    drag.ph = ph;
+    drag.offX = drag.sx - rect.left;
+    drag.offY = drag.sy - rect.top;
+
+    card.classList.remove("is-armed");
+    card.classList.add("is-dragging");
+    Object.assign(card.style, {
+      position: "fixed",
+      left: `${rect.left}px`,
+      top: `${rect.top}px`,
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+      margin: "0",
+    });
+    document.body.classList.add("is-dragging");
+  }
+
+  function moveDrag(x, y) {
+    const card = drag.card;
+    if (!drag.active || !card) return;
+    card.style.left = `${x - drag.offX}px`;
+    card.style.top = `${y - drag.offY}px`;
+
+    // 找离指针最近的槽位，把占位块挪过去
+    let best = null;
+    let bestDist = Infinity;
+    for (const el of $("#deviceGrid").children) {
+      if (el === card) continue;
+      const r = el.getBoundingClientRect();
+      const d = (x - (r.left + r.width / 2)) ** 2 + (y - (r.top + r.height / 2)) ** 2;
+      if (d < bestDist) { bestDist = d; best = el; }
+    }
+    if (!best || best === drag.ph) return;
+    const r = best.getBoundingClientRect();
+    if (x > r.left + r.width / 2) best.after(drag.ph);
+    else best.before(drag.ph);
+  }
+
+  async function endDrag() {
+    if (!drag.active) { cancelArm(); return; }
+    const card = drag.card;
+    const ph = drag.ph;
+    card.classList.remove("is-dragging");
+    card.removeAttribute("style");
+    ph.replaceWith(card);
+    drag.active = false;
+    drag.card = null;
+    drag.ph = null;
+    document.body.classList.remove("is-dragging");
+
+    const ids = gridCards().map((el) => el.dataset.id);
+    await saveSettings({ device_order: ids });
+    if (state.pendingRender) {
+      state.pendingRender = false;
+      renderDevices();
+    }
+    toast(t("toast.orderSaved"), "ok");
+  }
   /* ---------------- 事件 ---------------- */
 
   function wire() {
+    const grid = $("#deviceGrid");
+
     $$(".nav-item").forEach((btn) =>
       btn.addEventListener("click", () => setPage(btn.dataset.page)));
 
@@ -484,8 +616,33 @@
     });
     blur.addEventListener("change", () => saveSettings({ bg_blur: Number(blur.value) }));
 
+    // 长按卡片进入拖拽排序
+    grid.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || drag.active) return;
+      if (e.target.closest("input, button, select, textarea, a, label")) return;
+      const card = e.target.closest(".card");
+      if (!card) return;
+      drag.card = card;
+      drag.sx = e.clientX;
+      drag.sy = e.clientY;
+      card.classList.add("is-armed");
+      drag.timer = setTimeout(beginDrag, 320);
+    });
+
+    window.addEventListener("pointermove", (e) => {
+      if (!drag.active) {
+        if (!drag.card) return;
+        if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) > 8) cancelArm();
+        return;
+      }
+      drag.sx = e.clientX;
+      drag.sy = e.clientY;
+      moveDrag(e.clientX, e.clientY);
+    });
+
+    window.addEventListener("pointerup", () => { endDrag(); });
+    window.addEventListener("pointercancel", () => { endDrag(); });
     // 卡片内控件
-    const grid = $("#deviceGrid");
     grid.addEventListener("input", (e) => {
       const el = e.target;
       if (el.matches('input[type="range"][data-f="brightness"]')) {

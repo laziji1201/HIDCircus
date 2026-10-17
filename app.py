@@ -28,7 +28,7 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from server import create_server, collect_devices, load_settings, HOST
+from server import create_server, collect_devices, load_settings, STATUS, HOST
 
 APP_NAME = "HIDCircus"
 TRAY_POLL = 30
@@ -354,6 +354,8 @@ def main():
         log(f"HTTP 服务启动失败: {e}")
         raise
     PORT_HOLDER["port"] = port
+    STATUS["port"] = port
+    STATUS["log"] = str(LOG_FILE)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log(f"HTTP 面板: http://{HOST}:{port}")
     print(f"HTTP 面板: http://{HOST}:{port}")
@@ -374,11 +376,13 @@ def main():
         _root_icon.run_detached()
         time.sleep(1.2)
         tray_ok = bool(getattr(_root_icon, "_hwnd", None))
+        STATUS["tray"] = tray_ok
         log("托盘已就绪" if tray_ok else "托盘未建立（_hwnd 为空）")
     except Exception:
         log("托盘不可用: " + traceback.format_exc())
         _root_icon = None
         tray_ok = False
+        STATUS["tray"] = False
 
     threading.Thread(target=open_panel, args=(port,), daemon=True).start()
 

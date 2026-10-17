@@ -76,6 +76,10 @@ window.I18N = {
     "about.version": "版本",
     "about.port": "本地面板",
     "about.providers": "已接入厂商",
+    "about.tray": "系统托盘",
+    "about.trayOk": "已就绪",
+    "about.trayOff": "不可用（窗口关了程序会退出）",
+    "about.log": "日志",
     "about.legal": "仅通过 HID 做互操作性访问，不涉及固件刷写。与厂商软件请二选一，它们运行时会占用 HID 通道。",
 
     "toast.applied": "已写入",
@@ -83,6 +87,8 @@ window.I18N = {
     "toast.saved": "设置已保存",
     "toast.bgSet": "背景图已更新",
     "toast.bgCleared": "背景图已移除",
+    "toast.orderSaved": "顺序已保存",
+    "hint.drag": "长按卡片可拖动排序",
     "toast.tooBig": "图片超过 12MB"
   },
 
@@ -161,6 +167,10 @@ window.I18N = {
     "about.version": "Version",
     "about.port": "Local panel",
     "about.providers": "Vendors",
+    "about.tray": "Tray icon",
+    "about.trayOk": "Ready",
+    "about.trayOff": "Unavailable (app exits when the window closes)",
+    "about.log": "Log",
     "about.legal": "Interoperability access over HID only, no firmware flashing. Use this or the vendor software, not both — they compete for the HID channel.",
 
     "toast.applied": "Written",
@@ -168,6 +178,8 @@ window.I18N = {
     "toast.saved": "Settings saved",
     "toast.bgSet": "Background updated",
     "toast.bgCleared": "Background removed",
+    "toast.orderSaved": "Order saved",
+    "hint.drag": "Long-press a card to reorder",
     "toast.tooBig": "Image is over 12MB"
   }
 };

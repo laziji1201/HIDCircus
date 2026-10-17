@@ -42,10 +42,14 @@ DEFAULT_SETTINGS = {
     "theme": "auto",        # auto | dark | light
     "language": "zh",       # zh | en
     "background": "",       # 背景图文件名，空字符串表示不使用
-    "bg_dim": 0.55,         # 背景遮罩强度 0–0.95
+    "bg_dim": 0.72,         # 背景遮罩强度 0–0.95
     "bg_blur": 0,           # 背景模糊半径 0–24 px
     "refresh_seconds": 10,  # 自动刷新间隔
+    "device_order": [],     # 用户拖拽出来的设备顺序（设备 id 列表）
 }
+
+# 运行状态（app.py 启动后回填，供页面显示托盘是否可用）
+STATUS = {"tray": None, "port": None, "log": ""}
 
 _scan_lock = threading.Lock()
 _cache = {"at": 0.0, "devices": []}
@@ -217,6 +221,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/devices":
             self._json({"devices": collect_devices()})
             return
+        if route == "/api/status":
+            self._json(STATUS)
+            return
         if route == "/api/settings":
             self._json(load_settings())
             return
@@ -249,6 +256,9 @@ class Handler(BaseHTTPRequestHandler):
                                   body.get("action", ""), body.get("payload", {})))
             return
 
+        if route == "/api/status":
+            self._json(STATUS)
+            return
         if route == "/api/settings":
             try:
                 patch = json.loads(raw or b"{}")

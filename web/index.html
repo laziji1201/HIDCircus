@@ -113,6 +113,7 @@
     </header>
 
     <section class="page" id="pageDevices">
+      <p class="hint" id="dragHint" hidden data-i18n="hint.drag">长按卡片可拖动排序</p>
       <div class="grid" id="deviceGrid"></div>
       <div class="empty" id="emptyState" hidden>
         <svg class="ico ico-lg"><use href="#i-alert"/></svg>
@@ -204,6 +205,8 @@
             <div class="about-row"><span data-i18n="about.version">版本</span><b id="aboutVersion">1.1.0</b></div>
             <div class="about-row"><span data-i18n="about.port">本地面板</span><b id="aboutUrl">—</b></div>
             <div class="about-row"><span data-i18n="about.providers">已接入厂商</span><b id="aboutProviders">—</b></div>
+            <div class="about-row"><span data-i18n="about.tray">系统托盘</span><b id="aboutTray">—</b></div>
+            <div class="about-row"><span data-i18n="about.log">日志</span><b id="aboutLog">—</b></div>
           </div>
           <p class="fineprint" data-i18n="about.legal">仅通过 HID 做互操作性访问，不涉及固件刷写。与厂商软件请二选一，它们运行时会占用 HID 通道。</p>
         </div>

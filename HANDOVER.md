@@ -158,6 +158,16 @@ buf[89]     校验
 
 轮询率编码是反比位掩码：`code = 8000 / 频率` → 8000→`0x01`、1000→`0x08`、125→`0x40`。
 
+### 5.4 通用兜底（`providers/generic.py`）
+
+走 Windows SetupAPI 枚举**电池类设备**（`GUID_DEVCLASS_BATTERY`），再用
+`IOCTL_BATTERY_QUERY_TAG` / `QUERY_INFORMATION` / `QUERY_STATUS` 读电量：
+
+- 只保留非 ACPI 的设备（笔记本自身电池过滤掉）
+- 本机实测：能枚举到 ACPI 电池并正确读出 96%/充电中，但**没有带电池的外设可验证**，
+  所以"读外设"这条路径尚未在真机上验证过（代码路径与 ACPI 电池一致，风险可控）
+- 这类设备只有电量，`control()` 一律返回不支持
+
 **这台鼠标没有 RGB**（官网规格「RGB 灯光效果：无」），`0x0F` 照明类命令一律 timeout，别浪费时间。
 
 ## 6. 踩坑记录
@@ -193,6 +203,14 @@ buf[89]     校验
 19. 浏览器 UA 的 `[hidden]` 会输给带 `display` 的类选择器，`app.css` 顶部统一加了
     `[hidden] { display: none !important }`
 20. `-webkit-font-smoothing: antialiased` 在白底上会让文字明显变细发虚，只对深色主题启用
+21. **`.bat` 必须是 CRLF + ASCII**：写成 LF 或 UTF-8 后 cmd 会把 `if not exist (` 解析崩掉，
+    报 `'exist' 不是内部或外部命令`，程序根本起不来（这就是"托盘没出现"的真实原因）。
+    仓库里有 `.gitattributes` 固化 `*.bat eol=crlf`
+22. `SetupDiGetDeviceRegistryProperty` 要传 `SP_DEVINFO_DATA`，不能传设备接口的句柄，
+    否则名字永远是空字符串
+23. `ctypes.wintypes` 没有 `UCHAR`，用 `ctypes.c_ubyte`
+24. 前端自己踩的：同一作用域里重复 `const $ = ...` 会让**整个脚本不执行**（页面白屏）。
+    现在 `app.js` 顶部挂了全局 error / unhandledrejection，出错会在页面底部显示错误条
 
 ## 7. 待验证
 
