@@ -285,8 +285,9 @@ def start_device_watch():
     user32.RegisterDeviceNotificationW.restype = ctypes.c_void_p
     user32.RegisterDeviceNotificationW.argtypes = [w.HWND, ctypes.c_void_p, w.DWORD]
     user32.CreateWindowExW.restype = w.HWND
-    proc = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, w.HWND, w.UINT, w.WPARAM, w.LPARAM)(
-        _device_wndproc)
+    # 参数用 c_void_p：LPARAM 里是指针，用有符号整型会在高位为 1 时抛 OverflowError
+    proc = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, w.HWND, w.UINT,
+                              ctypes.c_void_p, ctypes.c_void_p)(_device_wndproc)
 
     class WNDCLASS(ctypes.Structure):
         _fields_ = [("style", w.UINT), ("lpfnWndProc", ctypes.c_void_p),
@@ -324,18 +325,25 @@ def start_device_watch():
 
 
 def _device_wndproc(hwnd, msg, wparam, lparam):
-    if msg == WM_DEVICECHANGE and wparam in (DBT_DEVICEARRIVAL, DBT_DEVICEREMOVECOMPLETE):
-        # 给系统一点时间枚举完新设备，再强制重扫
-        def _rescan():
-            time.sleep(0.8)
-            try:
-                collect_devices(force=True)
-                update_tray(force=True)
-            except Exception:
-                log("插拔后刷新失败: " + traceback.format_exc())
-        threading.Thread(target=_rescan, daemon=True).start()
-        return 0
-    return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+    try:
+        if msg == WM_DEVICECHANGE and int(wparam or 0) in (DBT_DEVICEARRIVAL,
+                                                           DBT_DEVICEREMOVECOMPLETE):
+            # 给系统一点时间枚举完新设备，再强制重扫
+            def _rescan():
+                time.sleep(0.8)
+                try:
+                    collect_devices(force=True)
+                    update_tray(force=True)
+                except Exception:
+                    log("插拔后刷新失败: " + traceback.format_exc())
+            threading.Thread(target=_rescan, daemon=True).start()
+            return 0
+    except Exception:
+        pass
+    # c_void_p 只接受非负整数，而 LPARAM 经常是负数，先按无符号取一遍
+    wp = int(wparam or 0) & 0xFFFFFFFFFFFFFFFF
+    lp = int(lparam or 0) & 0xFFFFFFFFFFFFFFFF
+    return user32.DefWindowProcW(hwnd, msg, ctypes.c_void_p(wp), ctypes.c_void_p(lp))
 
 
 # ---------------------------------------------------------------- 窗口识别
@@ -549,6 +557,13 @@ def _spawn_window(browser, url, profile: Path, wipe=False, extra=()):
         return False
 
 
+def _profile_candidates():
+    """先用手上这份配置；不行再换一份全新的（避开被提权实例锁住的那份）。"""
+    base = ROOT / ".runtime"
+    yield base / "browser-profile"
+    yield base / f"browser-profile-{int(time.time()) % 100000}"
+
+
 def open_panel(port):
     """把面板打开；已经开着就提到前台。"""
     existing = panel_windows()
@@ -564,23 +579,22 @@ def open_panel(port):
     log(f"可用浏览器: {name or '无'}")
 
     if browser and not _low_integrity:
-        profile = ROOT / ".runtime" / "browser-profile"
-        for label, kwargs in (("现有配置", {"wipe": False}),
-                              ("清空配置副本", {"wipe": True})):
+        for profile in _profile_candidates():
             since = time.time()
-            log(f"尝试无边框窗口（{name} · {label}）")
-            if not _spawn_window(browser, url, profile, **kwargs):
+            fresh = not profile.exists()
+            log(f"尝试无边框窗口（{name} · {profile.name}"
+                f"{' · 新配置' if fresh else ''}）")
+            if not _spawn_window(browser, url, profile, wipe=fresh):
                 continue
             if wait_for_page(since, 12):
                 log(f"面板已就绪（{name} 无边框窗口）: {url}")
                 return True
-            log(f"{label} 没收到页面心跳")
+            log("没收到页面心跳")
             if _elevation_dialog():
-                log("检测到 Edge 的「现有实例正在以提升的权限运行」对话框："
-                    "说明有以管理员权限运行的 Edge 占用了本工具的配置目录。"
-                    "请关闭那个 Edge 窗口（或结束它）后重试，已停止继续弹窗")
+                log("检测到「现有实例正在以提升的权限运行」：有管理员权限的 Edge 占着"
+                    "这份配置目录，换一个新配置目录重试")
+            else:
                 break
-            log("换下一档重试")
 
     since = time.time()
     log("改用默认浏览器打开面板")

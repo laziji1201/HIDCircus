@@ -267,7 +267,21 @@ buf[89]     校验
     `/api/ping` 不校验（心跳要简单）。手动调试接口时要先取 token
 36. **设备插拔走 WM_DEVICECHANGE**：隐藏窗口注册 HID 设备接口通知，插拔后 0.8 秒强制重扫，
     不再干等 10 秒轮询
-37. **打包实测（2026-10-17）**：`pyinstaller --onefile --windowed --add-data "web;web"
+37. **打包方式改为 onedir**（`dist\HIDCircus\HIDCircus.exe` + `_internal`）：
+    `--onefile` 启动时要把自己解压到 `%TEMP%`，在受限环境下会直接报
+    `Could not create temporary directory!`（本机和用户机器都踩到了）。
+    onedir 没有解压步骤，启动更快，也不依赖 `%TEMP%` 可写。
+    打包脚本会顺带把 `tools\setup.ps1` 和 `setup.bat` 复制进产物目录（exe 内不含它们），并压成 zip
+38. **`.ps1` 一律存 UTF-8 带 BOM**：`build.ps1` 也踩过一次（中文 Write-Host 全乱码）
+39. **ctypes 窗口回调的参数不要用 `w.LPARAM`**：LPARAM 是指针，高位为 1 时
+    ctypes 转换会抛 `OverflowError: int too long to convert`，表现为 stderr 无限刷屏。
+    用 `ctypes.c_void_p` 接，再用 `int(wparam or 0)` 比较
+40. **onedir 实测通过（2026-10-17 18:15）**：`dist\HIDCircus\HIDCircus.exe` 启动后
+    `dist\HIDCircus\logs\app.log` 正常、8795 端口正常、`/`、`/api/devices` 都返回 200。
+    验证时要 **用 `cmd /c start ""` 启动**：直接从脚本里 `Start-Process` 拉窗口版会立刻退出
+    （沙箱里 stdio/job 句柄被占，PyInstaller 窗口版没有控制台，失败也看不到）。
+    排错时可用 `pyinstaller --onedir --console --name X ... app.py` 打个控制台版看 stderr
+41. **打包实测（2026-10-17，onefile 版）**：`pyinstaller --onefile --windowed --add-data "web;web"
     --add-data "assets;assets" --icon assets\icon.ico app.py` 产出 13.2 MB 的 exe，
     实测能正常起服务、返回页面、读设备（`dist\logs\app.log` 有完整日志）。
     **打包不会引入新的权限问题**：托盘失败只因启动它的进程被降权，正常双击是「中」权限。
