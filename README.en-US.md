@@ -8,6 +8,21 @@ One control panel for peripherals from multiple vendors. It stays in the tray: o
 
 ![Devices page (dark)](docs/screenshots/devices-dark.png)
 
+## A note from the author
+
+This exists because I got tired of installing a different vendor suite for every peripheral on my desk.
+
+So, up front:
+
+- **It has bugs. Probably many.** I only tested it on my own machine with three devices
+- **No guarantee it works with any other model.** Same-vendor devices are probed on a best-effort basis;
+  if nothing responds, that is the expected outcome
+- **The extension system exists, but it is not guaranteed to work.** The format was reverse-engineered
+  from three devices; obscure hardware will likely need you to fix packet layouts yourself
+- If it crashes, misreads, or writes a bad setting to your device — that is on you. Double-check before applying writes
+
+Use it if it helps; otherwise treat it as a reference implementation.
+
 ## Who is this for
 
 **Built for people whose desk has peripherals from several different vendors.**
@@ -175,6 +190,20 @@ Adding a vendor = one file implementing `scan()` / `control()` plus one line in
 - No vendor trademarks or logos are used; this README carries an unofficial disclaimer
 - No DRM circumvention, no firmware flashing
 - All endpoints bind to `127.0.0.1` only; write endpoints require a random per-session token
+
+## Credits
+
+**No code was copied**, but protocol behaviour and interaction design were informed by these public sources:
+
+| Project | License | What was learned |
+|---|---|---|
+| [Solaar](https://github.com/pwr-Solaar/Solaar) | GPL-2.0 | Logitech HID++ feature IDs and packet layout (0x1004 battery) |
+| [OpenRazer](https://github.com/openrazer/openrazer) | GPL-2.0 | Razer 91-byte packet layout and battery command |
+| [viper-tray](https://github.com/damianyoko/viper-tray) | MIT | Razer feature report send/receive details |
+| [G-Helper](https://github.com/seerge/g-helper) | GPL-3.0 | ASUS headset 0xCC command table |
+| [AF Media Bar](https://github.com/Fervent-Tempo/AF-Media-Bar) | see repo | Tray popup interaction pattern (native popup, dismiss on outside click) — no code used |
+
+Each provider file keeps a source note at the top.
 
 ## Protocol references
 

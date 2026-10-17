@@ -8,6 +8,19 @@
 
 ![设备页（深色）](docs/screenshots/devices-dark.png)
 
+## 作者的话
+
+这东西纯粹是自己嫌麻烦捣鼓出来的：桌面上 ROG、罗技、雷蛇三家的外设各要一套软件，懒得开。
+
+所以先说清楚：
+
+- **可能有 bug，而且不少**。我只在自己这台机器、这三台设备上验证过
+- **不保证适配任何其它型号**。同品牌其它型号靠试探读，读到算运气，读不到是正常的
+- **扩展机制做了，但完全不保证能用**。格式是我按三台设备反推的，冷门设备大概率要你自己调报文
+- 崩了、读错了、把设备设置写坏了，作者概不负责；写操作前请自己确认
+
+觉得能用就用，不能用就当一个参考实现。
+
 ## 适合谁
 
 **为"桌面上同时有好几家的外设"这种人做的。**
@@ -165,6 +178,20 @@ extensions/     扩展格式说明与示例
 - 不使用厂商商标/logo；本 README 有非官方免责声明
 - 不涉及 DRM 绕过、固件刷写
 - 所有接口只监听 `127.0.0.1`，写入接口需要启动时生成的随机 token
+
+## 借鉴与致谢
+
+**没有复制任何代码**，但协议行为、交互设计参考了下面这些项目/作品的公开信息：
+
+| 项目 | 许可证 | 借鉴了什么 |
+|---|---|---|
+| [Solaar](https://github.com/pwr-Solaar/Solaar) | GPL-2.0 | 罗技 HID++ 的 feature 编号与报文结构（`0x1004` 电量） |
+| [OpenRazer](https://github.com/openrazer/openrazer) | GPL-2.0 | 雷蛇 91 字节报文的整体布局与电量命令 |
+| [viper-tray](https://github.com/damianyoko/viper-tray) | MIT | 雷蛇 feature report 的收发细节 |
+| [G-Helper](https://github.com/seerge/g-helper) | GPL-3.0 | ASUS 耳机 `0xCC` 报文的命令表 |
+| [AF Media Bar](https://github.com/Fervent-Tempo/AF-Media-Bar) | 见其仓库 | 托盘弹窗的交互形态（原生小窗、点空白处收起）——没有用它的代码，只是照着这个体验做的 |
+
+各 provider 文件顶部保留了对应的来源标注。
 
 ## 协议来源
 

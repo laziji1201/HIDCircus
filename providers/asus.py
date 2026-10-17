@@ -55,7 +55,6 @@ class AsusProvider(Provider):
         return r
 
     def _all_pids(self):
-        """枚举本厂商所有带控制接口的型号。"""
         pids = []
         for d in self.hid.enumerate(0x0B05):
             if d.get("usage_page") == 0xFF00 and d["product_id"] not in pids:
@@ -70,7 +69,6 @@ class AsusProvider(Provider):
         return fallback
 
     def _probe_unknown(self, pid):
-        """未知型号：用同一套报文试探，读到什么算什么。"""
         path = self._find_path(pid)
         if not path:
             return None

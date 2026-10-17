@@ -122,7 +122,6 @@ kernel32.GetModuleHandleW.restype = w.HINSTANCE
 kernel32.GetModuleHandleW.argtypes = [w.LPCWSTR]
 
 def _hicon(image):
-    """PIL 图像 -> HICON（32 位带 alpha，系统托盘才不糊）。"""
     img = image.convert("RGBA")
     width, height = img.size
     pixels = img.tobytes("raw", "BGRA")
@@ -154,7 +153,6 @@ def _hicon(image):
     return hicon
 
 class Tray:
-    """一个最小的系统托盘。start() 之后消息循环跑在自己的线程里。"""
 
     def __init__(self, image, title, items, on_click=None):
         self._image = image

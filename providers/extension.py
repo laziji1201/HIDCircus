@@ -10,7 +10,6 @@ PKT_DEFAULT = 64
 RAZER_PKT = 91
 
 def _as_int(value, default=None):
-    """接受 12 / "12" / "0x0C" / "0x0C 0x00" 这类写法，取第一个数。"""
     if value is None:
         return default
     if isinstance(value, int):
@@ -26,7 +25,6 @@ def _as_int(value, default=None):
     return default
 
 def _as_bytes(value):
-    """把 "0x51 0x28 0x00" / "51 28 00" / [0x51, 0x28] 统一成 bytes。"""
     if value is None:
         return b""
     if isinstance(value, (bytes, bytearray)):
@@ -46,7 +44,6 @@ def _as_bytes(value):
     return bytes(out)
 
 def _template(template, values):
-    """把 "0x51 0x28 {value}" 里的 {name} 换成数字（支持 le16/le32）。"""
     if not template:
         return b""
     data = bytearray()
@@ -72,7 +69,6 @@ def _template(template, values):
     return bytes(data)
 
 def _extract(report, rule):
-    """按 {offset, size, scale, equals, map_...} 从响应里取一个值。"""
     if not isinstance(rule, dict) or not report:
         return None
     offset = _as_int(rule.get("offset"), 0)
@@ -104,7 +100,6 @@ def _extract(report, rule):
     return value
 
 def validate(data: dict, path: Path | None = None) -> list[str]:
-    """返回错误列表，空列表表示可用。字段缺失都给出人能看懂的说明。"""
     errors = []
     where = f"{path.name}: " if path else ""
 
@@ -169,7 +164,6 @@ def validate(data: dict, path: Path | None = None) -> list[str]:
     return errors
 
 def _controls_of(ext):
-    """把 write 里的 control 声明整理成前端好渲染的结构。"""
     out = []
     for action, rule in ext.write_spec.items():
         control = rule.get("control")
@@ -190,7 +184,6 @@ def _controls_of(ext):
     return out
 
 class Extension:
-    """一份加载好的扩展。"""
 
     def __init__(self, data: dict, path: Path):
         self.path = path
@@ -242,7 +235,6 @@ class Extension:
         }
 
 class ExtensionProvider(Provider):
-    """把加载到的扩展当成一个 provider：按 vid/pid 匹配，按 JSON 读写。"""
 
     VENDOR = "extension"
     LABEL = "扩展"
@@ -430,7 +422,6 @@ class ExtensionProvider(Provider):
         return {"ok": True}
 
 def load_extensions(*directories):
-    """从若干目录加载 *.json，返回 (扩展列表, 错误列表)。"""
     extensions, errors = [], []
     seen = set()
     for directory in directories:

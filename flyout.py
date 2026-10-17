@@ -100,7 +100,6 @@ def _rgb(r, g, b):
     return (r & 0xFF) | ((g & 0xFF) << 8) | ((b & 0xFF) << 16)
 
 class Flyout:
-    """一个自绘的小弹窗。show() 之后阻塞在消息循环里，关闭后返回。"""
 
     WIDTH = 320
     ROW_H = 34
@@ -155,7 +154,6 @@ class Flyout:
         self._class_atom = user32.RegisterClassW(ctypes.byref(wc))
 
     def show(self):
-        """在光标上方弹出；关闭时返回。"""
         thread = threading.Thread(target=self._run, daemon=True)
         thread.start()
         thread.join(timeout=30)
@@ -214,7 +212,6 @@ class Flyout:
 
     @staticmethod
     def _has_control(d):
-        """这台设备有没有可以直接点的控制（目前：ASUS 灯效、扩展控件）。"""
         extra = d.get("extra") or {}
         if extra.get("lighting"):
             return True

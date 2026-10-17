@@ -75,7 +75,6 @@ def current_integrity(pid=None):
             kernel32.CloseHandle(token)
 
 def parent_process():
-    """谁启动了我们（排查"低权限"是从哪个入口继承来的）。"""
     try:
         import subprocess as sp
         out = sp.run(["powershell", "-NoProfile", "-Command",
@@ -133,14 +132,12 @@ _SCRUB_RULES = (
 )
 
 def _scrub(msg):
-    """日志脱敏：用户名、疑似序列号、邮箱都不该写进日志文件。"""
     text = str(msg)
     for pattern, repl in _SCRUB_RULES:
         text = pattern.sub(repl, text)
     return text
 
 def log(msg):
-    """pythonw 没有控制台，出错只能靠文件留痕。"""
     try:
         if LOG_FILE.exists() and LOG_FILE.stat().st_size > 512 * 1024:
             LOG_FILE.write_text("", encoding="utf-8")
@@ -164,7 +161,6 @@ def _icon_base():
     return _ICON_BASE or None
 
 def make_icon(battery):
-    """托盘图标：用设计稿图标，低电量时右下角加个红点。"""
     size = 64
     base = _icon_base()
     if base is not None:
@@ -292,7 +288,6 @@ def _device_wndproc(hwnd, msg, wparam, lparam):
     return user32.DefWindowProcW(hwnd, msg, ctypes.c_void_p(wp), ctypes.c_void_p(lp))
 
 def _process_name(hwnd):
-    """窗口属于哪个进程（只取 exe 名）。"""
     pid = w.DWORD(0)
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
     if not pid.value:
@@ -352,7 +347,6 @@ CHROMIUM_CANDIDATES = [
 ]
 
 def find_browser():
-    """找一个支持 --app 无边框窗口的 Chromium 系浏览器。"""
     for name, paths in CHROMIUM_CANDIDATES:
         for path in paths:
             if Path(path).is_file():
@@ -407,7 +401,6 @@ def seed_profile(profile: Path):
         pass
 
 def clean_profile_state(profile: Path):
-    """清掉会话恢复文件（被强杀后留下的"崩溃会话"会让新窗口卡在错误页）。"""
     default = profile / "Default"
     for rel in ("Sessions", "Current Session", "Current Tabs",
                 "Last Session", "Last Tabs"):
@@ -429,7 +422,6 @@ def _elevation_dialog():
     return False
 
 def page_alive(since):
-    """页面有没有在 since 之后回过心跳。"""
     return (STATUS.get("last_ping") or 0) >= since
 
 def wait_for_page(since, timeout):
@@ -467,13 +459,11 @@ def _spawn_window(browser, url, profile: Path, wipe=False, extra=()):
         return False
 
 def _profile_candidates():
-    """先用手上这份配置；不行再换一份全新的（避开被提权实例锁住的那份）。"""
     base = ROOT / ".runtime"
     yield base / "browser-profile"
     yield base / f"browser-profile-{int(time.time()) % 100000}"
 
 def open_panel(port):
-    """把面板打开；已经开着就提到前台。"""
     existing = panel_windows()
     if existing:
         for hwnd in existing:
@@ -529,13 +519,11 @@ def open_panel(port):
 _handled = {"panel": 0.0}
 
 def close_flyout():
-    """关掉原生小面板（如果开着）。"""
     hwnd = user32.FindWindowW("HIDCircusFlyout", None)
     if hwnd:
         user32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)
 
 def _relaunch_elevated():
-    """用管理员权限重启自己（一次 UAC）。成功返回 True。"""
     try:
         shell32 = ctypes.WinDLL("shell32", use_last_error=True)
         shell32.ShellExecuteW.restype = ctypes.c_void_p
@@ -566,7 +554,6 @@ def _relaunch_elevated():
         return False
 
 def _system_is_dark():
-    """系统主题是深色还是浅色（主题设为 auto 时用）。"""
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
@@ -622,7 +609,6 @@ def flyout_colors():
                              FLYOUT_COLORS[("dark", "amber")])
 
 def _panel_control(device_id, action):
-    """原生面板上的按钮：查设备所属 provider 再下发动作。"""
     try:
         devices = collect_devices()
         dev = next((d for d in devices if d.get("id") == device_id), None)
@@ -636,7 +622,6 @@ def _panel_control(device_id, action):
         log("面板控制异常: " + traceback.format_exc())
 
 def show_flyout(mode="panel"):
-    """托盘左键：原生面板（不走浏览器）。再点一次收起。"""
     global _flyout_open
     existing = user32.FindWindowW("HIDCircusFlyout", None)
     if existing:
@@ -657,14 +642,12 @@ def show_flyout(mode="panel"):
         _flyout_open = False
 
 def handle_ui_requests():
-    """页面按钮发过来的请求：打开主面板 / 关闭小面板。"""
     if UI_REQUESTS["panel"] > _handled["panel"]:
         _handled["panel"] = UI_REQUESTS["panel"]
         close_flyout()
         _ui_queue.put(lambda: open_panel(PORT_HOLDER["port"]))
 
 def close_panel():
-    """退出时关掉我们开的面板窗口，别留一个连不上后端的空壳。"""
     for hwnd in panel_windows():
         try:
             user32.PostMessageW(hwnd, 0x0010, 0, 0)               
@@ -689,7 +672,6 @@ def on_refresh(icon=None, item=None):
     _ui_queue.put(lambda: update_tray(force=True))
 
 def pump():
-    """主循环里执行队列中的动作（托盘回调在自己的线程）。"""
     while not _stop.is_set():
         try:
             handle_ui_requests()
@@ -732,7 +714,6 @@ def acquire_single_instance():
     return handle, not already
 
 def find_running_instance():
-    """返回 (port, status_json) 或 (None, None)。"""
     for port in range(PORT, PORT + PORT_TRIES):
         try:
             with urllib.request.urlopen(
@@ -755,7 +736,6 @@ def pid_by_port(port):
     except Exception:
         pass
     return None
-
 
 def kill_pid(pid):
     try:

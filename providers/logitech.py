@@ -34,7 +34,6 @@ class LogitechProvider(Provider):
             pass
 
     def _xfer(self, hs, hl, payload, dev_idx=0xFF, timeout=0.8):
-        """短接口写，长接口读。返回响应字节串或 None。"""
         self._drain(hl)
         hs.write(bytes(payload))
         deadline = time.time() + timeout
@@ -49,7 +48,6 @@ class LogitechProvider(Provider):
         return None
 
     def _battery(self, hs, hl):
-        """返回 (电量, 充电标志) 或 (None, None)"""
         r = self._xfer(hs, hl, [0x10, 0xFF, 0x00, 0x00, 0x10, 0x04, 0x00])
         if not r or len(r) < 5 or r[4] == 0:
             return None, None
@@ -74,7 +72,6 @@ class LogitechProvider(Provider):
         return fallback
 
     def _probe_unknown(self, pid):
-        """HID++ 的电量 feature 0x1004 是跨型号通用的，先试探它。"""
         short, long_ = self._find(pid)
         if not short or not long_:
             return None

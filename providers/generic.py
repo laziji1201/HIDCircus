@@ -98,7 +98,6 @@ def _ioctl(h, code, inbuf, insize, outbuf, outsize):
     return ok and ret.value > 0
 
 def _read_battery(path):
-    """读一个电池设备，返回 (百分比, 是否充电) 或 None。"""
     h = kernel32.CreateFileW(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_RW,
                              None, OPEN_EXISTING, 0, None)
     if not h or h == INVALID_HANDLE_VALUE:
@@ -145,7 +144,6 @@ def _device_name(hdev, devinfo):
     return ""
 
 def _dump_battery_devices():
-    """枚举系统里所有电池设备（调试用：确认过滤规则是否符合预期）。"""
     out = []
     hdev = setupapi.SetupDiGetClassDevsW(ctypes.byref(GUID_DEVCLASS_BATTERY), None, None,
                                          DIGCF_PRESENT | DIGCF_DEVICEINTERFACE)
@@ -178,7 +176,6 @@ def _dump_battery_devices():
     return out
 
 class GenericBatteryProvider(Provider):
-    """把 Windows 认得的"外设电池设备"作为设备列出来。"""
 
     VENDOR = "generic"
     LABEL = "其它设备"

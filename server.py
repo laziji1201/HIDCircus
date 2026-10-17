@@ -74,7 +74,6 @@ def load_settings():
     return data
 
 def save_settings(patch):
-    """合并写入。先写临时文件再替换，避免写一半断电留下坏配置。"""
     with _settings_lock:
         data = load_settings()
         for k, v in (patch or {}).items():
@@ -87,7 +86,6 @@ def save_settings(patch):
         return data
 
 def create_server():
-    """依次尝试端口，返回 (server, 实际端口)。"""
     last_error = None
     for offset in range(PORT_TRIES):
         port = PORT + offset
@@ -136,7 +134,6 @@ def _drop_duplicate_extensions(devices):
     return kept
 
 def collect_devices(force=False):
-    """枚举所有设备。串行执行 + 短时缓存，避免多线程抢 HID 句柄。"""
     now = time.time()
     if not force and now - _cache["at"] < CACHE_TTL:
         return [dict(d) for d in _cache["devices"]]
@@ -151,7 +148,6 @@ def collect_devices(force=False):
     return [dict(d) for d in devices]
 
 def _apply_aliases(devices):
-    """把用户起的名字套到设备上（改完后名称即别名，原厂名留在 raw_name）。"""
     aliases = load_settings().get("aliases") or {}
     for d in devices:
         d.setdefault("raw_name", d.get("name", ""))
@@ -160,7 +156,6 @@ def _apply_aliases(devices):
             d["name"] = alias
 
 def do_control(vendor, device_id, action, payload):
-    """执行控制写入。与扫描共用同一把锁，避免写入和扫描抢同一个 HID 句柄。"""
     with _scan_lock:
         for p in PROVIDERS:
             if p.VENDOR == vendor:
@@ -187,7 +182,6 @@ IMAGE_EXT = {"image/png": ".png", "image/jpeg": ".jpg",
              "image/webp": ".webp", "image/gif": ".gif"}
 
 def _debug_log(msg):
-    """请求日志，只在 HIDCIRCUS_DEBUG=1 时写（排查"浏览器到底连没连上"用）。"""
     if os.environ.get("HIDCIRCUS_DEBUG") != "1":
         return
     try:
@@ -227,7 +221,6 @@ class Handler(BaseHTTPRequestHandler):
         return self.rfile.read(length) if length else b""
 
     def _serve_index(self):
-        """把主题/配色/语言注入 HTML，避免首帧闪一下再变。"""
         try:
             html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
         except OSError:
@@ -251,14 +244,12 @@ class Handler(BaseHTTPRequestHandler):
                    CONTENT_TYPES.get(ext, "application/octet-stream"))
 
     def _require_token(self) -> bool:
-        """写入类接口要求 token；不对就回 403。"""
         if self.headers.get("X-HIDCircus-Token") == SESSION_TOKEN:
             return True
         self._json({"ok": False, "error": "unauthorized"}, 403)
         return False
 
     def _safe_web_path(self, rel: str) -> Path:
-        """只允许 web/ 下的文件，挡住 .. 穿越。"""
         target = (WEB_DIR / rel).resolve()
         if WEB_DIR.resolve() not in target.parents and target != WEB_DIR.resolve():
             return None
@@ -419,7 +410,6 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, 404)
 
     def _export_extension(self, route):
-        """把某个扩展的原始 JSON 原样吐出来，前端直接下载。"""
         from urllib.parse import parse_qs
         from providers import EXTENSIONS
         query = parse_qs(urlparse(self.path).query)
@@ -493,7 +483,6 @@ class Handler(BaseHTTPRequestHandler):
             "Content-Disposition": 'attachment; filename="hidcircus-hid-report.json"'})
 
     def _save_background(self, raw: bytes):
-        """接收原始图片字节，存成固定文件名（只保留一张，省得堆垃圾）。"""
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip()
         ext = IMAGE_EXT.get(ctype)
         if ext is None:
@@ -512,7 +501,6 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": True, "settings": settings})
 
 def autostart_enabled():
-    """计划任务是否存在（普通用户查询自己的任务不需要权限）。"""
     try:
         proc = subprocess.run(["schtasks", "/query", "/tn", "HIDCircus"],
                               capture_output=True, text=True, timeout=15,

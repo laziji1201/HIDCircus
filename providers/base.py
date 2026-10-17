@@ -4,7 +4,6 @@ from typing import Optional
 
 @dataclass
 class Device:
-    """面板展示用的统一设备模型"""
     id: str
     name: str
     vendor: str
@@ -24,13 +23,11 @@ class Device:
         }
 
 class Provider:
-    """所有厂商 provider 的基类"""
 
     VENDOR = ""
     LABEL = ""
 
     def scan(self) -> list[Device]:
-        """枚举该厂商当前连接的设备并读取状态"""
         raise NotImplementedError
 
     def control(self, device_id: str, action: str, payload: dict) -> dict:

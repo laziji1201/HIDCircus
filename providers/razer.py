@@ -57,7 +57,6 @@ class RazerProvider(Provider):
         self.hid = hid_module
 
     def _find_path(self, pid):
-        """取带 91 字节 feature report 的鼠标集合。"""
         fallback = None
         for d in self.hid.enumerate(0x1532, pid):
             if d.get("usage_page") == 0x0001 and d.get("usage") == 0x0002:
@@ -76,7 +75,6 @@ class RazerProvider(Provider):
         return h
 
     def _xfer(self, h, cmd_class, cmd_id, args=(), data_size=0, txn=DEFAULT_TXN):
-        """发一条命令，返回 (状态码, 响应字节串)。状态不是 success 时字节串可能是 None。"""
         req = bytearray(PKT)
         req[2] = txn
         req[6] = data_size
@@ -96,7 +94,6 @@ class RazerProvider(Provider):
         return raw[1], raw
 
     def _read(self, h, cmd_class, cmd_id, args=(), data_size=0, retries=2):
-        """只读命令，忙时重试；返回响应参数区的前若干字节，失败返回 None。"""
         for attempt in range(retries):
             status, raw = self._xfer(h, cmd_class, cmd_id, args, data_size)
             if status == ST_SUCCESS:
@@ -115,7 +112,6 @@ class RazerProvider(Provider):
         return pids
 
     def _probe_unknown(self, pid):
-        """91 字节报文协议在雷蛇各型号间基本一致，逐项试探。"""
         path = self._find_path(pid)
         if not path:
             return None
