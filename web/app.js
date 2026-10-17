@@ -326,6 +326,61 @@
       </div>`;
   }
 
+  /* 扩展声明的通用控件：按钮组（灯效开关之类）+ 数值输入（DPI 之类） */
+  function extensionControlsHTML(d) {
+    const info = (d.extra || {}).extension;
+    const controls = (info && info.controls) || [];
+    if (!controls.length) return "";
+
+    const groups = [];
+    controls.forEach((c) => {
+      const key = c.group || c.action;
+      let group = groups.find((g) => g.key === key);
+      if (!group) { group = { key, type: c.type, label: c.label, items: [] }; groups.push(group); }
+      group.items.push(c);
+    });
+
+    const rows = groups.map((g) => {
+      if (g.type === "number") {
+        const first = g.items[0];
+        const fields = (first.fields && first.fields.length) ? first.fields : ["value"];
+        const inputs = fields.map((f) => `
+          <input class="num-input ext-num" data-field="${esc(f)}" type="number"
+                 min="${first.min ?? ""}" max="${first.max ?? ""}"
+                 value="${first.default ?? ""}" style="width:78px">`).join("");
+        return `
+          <div class="field ext-ctl" data-action="${esc(first.action)}" data-kind="number">
+            <label>${esc(g.label)}</label>
+            <div class="row-actions">${inputs}
+              <button class="btn btn-primary ext-apply">${esc(t("action.apply"))}</button>
+            </div>
+          </div>`;
+      }
+      const buttons = g.items.map((c) => `
+        <button class="btn btn-ghost ext-btn" data-action="${esc(c.action)}"
+                data-value="${esc(c.value ?? "")}">${esc(c.label)}</button>`).join("");
+      return `
+        <div class="field ext-ctl" data-kind="buttons">
+          <label>${esc(g.label)}</label>
+          <div class="row-actions">${buttons}</div>
+        </div>`;
+    }).join("");
+
+    return `<div class="ctl-group"><span class="ctl-group-title">${esc(t("ext.controls"))}</span>${rows}</div>`;
+  }
+
+  async function runExtensionControl(deviceId, action, payload) {
+    const out = await api("/api/control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        vendor: "extension", device_id: deviceId, action, payload: payload || {},
+      }),
+    });
+    if (out.ok) toast(t("toast.applied"), "ok");
+    else toast(`${t("toast.failed")}: ${out.error || "?"}`, "bad");
+  }
+
   function mouseHTML(d) {
     const extra = d.extra || {};
     if (!extra.dpi) return "";
@@ -391,7 +446,8 @@
     const hasLighting = d.vendor_key === "asus" && !!extra.lighting;
     const hasMouse = d.vendor_key === "razer" && !!extra.dpi;
     const controls = (hasLighting ? lightingHTML(d) : "") +
-                     (hasMouse ? mouseHTML(d) : "");
+                     (hasMouse ? mouseHTML(d) : "") +
+                     extensionControlsHTML(d);
     const body = controls ||
       `<div class="ctl-empty">${esc(t("ctl.none"))}</div>`;
 
@@ -857,6 +913,29 @@
         mark("#autostartSeg", on ? "on" : "off");
       } else {
         toast(`${t("toast.failed")}: ${out.error || out.message || "?"}`, "bad");
+      }
+    });
+
+    // 扩展控件：按钮 + 数值输入
+    $("#deviceGrid").addEventListener("click", async (e) => {
+      const btn = e.target.closest(".ext-btn");
+      if (btn) {
+        const card = btn.closest(".card");
+        await runExtensionControl(card.dataset.id, btn.dataset.action, {});
+        loadDevices(true);
+        return;
+      }
+      const apply = e.target.closest(".ext-apply");
+      if (apply) {
+        const box = apply.closest(".ext-ctl");
+        const card = apply.closest(".card");
+        const payload = {};
+        box.querySelectorAll(".ext-num").forEach((input) => {
+          const val = Number(input.value);
+          if (!Number.isNaN(val)) payload[input.dataset.field] = val;
+        });
+        await runExtensionControl(card.dataset.id, box.dataset.action, payload);
+        loadDevices(true);
       }
     });
 

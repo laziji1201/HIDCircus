@@ -1,7 +1,18 @@
-# 等面板起来：扫描 8777-8784，成功则打印 PORT=xxxx 并退出 0
-# 失败退出 1（run.bat 据此打印日志尾部）
+﻿# 等面板起来，并报告 HIDCircus 进程自己的权限级别
+# 输出：LEVELAPP=...  PORT=...
+# 低权限（被降权）时即使服务起来了，托盘和面板窗口也不会出现。
+# 失败退出 1
 $ErrorActionPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
+
+$log = Join-Path (Split-Path -Parent $PSScriptRoot) 'logs\app.log'
+$levelApp = '未知'
+if (Test-Path $log) {
+    $line = Get-Content $log -Encoding UTF8 -Tail 60 |
+        Where-Object { $_ -match '进程完整性' } | Select-Object -Last 1
+    if ($line -match '进程完整性[:：]\s*(.+)$') { $levelApp = $Matches[1].Trim() }
+}
+Write-Host "LEVELAPP=$levelApp"
 
 for ($port = 8777; $port -le 8784; $port++) {
     try {

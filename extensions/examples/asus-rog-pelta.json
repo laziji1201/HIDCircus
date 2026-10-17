@@ -45,14 +45,16 @@
       "transport": "output",
       "report_id": "0xCC",
       "request": "0x51 0x10 0x00 0x00 0x01",
-      "read_size": 64
+      "read_size": 64,
+      "control": { "type": "button", "group": "灯效", "label": "开", "value": "on" }
     },
     "lighting_off": {
       "label": "关灯效",
       "transport": "output",
       "report_id": "0xCC",
       "request": "0x51 0x10 0x00 0x00 0x00",
-      "read_size": 64
+      "read_size": 64,
+      "control": { "type": "button", "group": "灯效", "label": "关", "value": "off" }
     }
   }
 }

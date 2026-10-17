@@ -182,8 +182,36 @@ def validate(data: dict, path: Path | None = None) -> list[str]:
             continue
         if not (rule.get("request") or rule.get("command")):
             errors.append(f"{where}write.{name} 缺少 request/command 模板")
+        control = rule.get("control")
+        if control is not None:
+            if not isinstance(control, dict):
+                errors.append(f"{where}write.{name}.control 必须是对象")
+            elif control.get("type") not in ("button", "number"):
+                errors.append(f"{where}write.{name}.control.type 只能是 button / number")
 
     return errors
+
+
+def _controls_of(ext):
+    """把 write 里的 control 声明整理成前端好渲染的结构。"""
+    out = []
+    for action, rule in ext.write_spec.items():
+        control = rule.get("control")
+        if not isinstance(control, dict):
+            continue
+        item = {
+            "action": action,
+            "type": control.get("type", "button"),
+            "group": control.get("group") or action,
+            "label": control.get("label") or action,
+            "value": control.get("value"),
+            "fields": control.get("fields") or [],
+            "min": control.get("min"),
+            "max": control.get("max"),
+            "default": control.get("default"),
+        }
+        out.append(item)
+    return out
 
 
 # ---------------------------------------------------------------- 运行时
@@ -362,7 +390,8 @@ class ExtensionProvider(Provider):
                      vendor=ext.vendor_label, kind=ext.device.get("kind", "unknown"))
         dev.extra["extension"] = {"id": ext.id, "name": ext.name,
                                   "file": ext.path.name,
-                                  "writes": ext.write_spec}
+                                  "writes": sorted(ext.write_spec.keys()),
+                                  "controls": _controls_of(ext)}
         if not ext.read_spec:
             dev.note = "扩展未定义读取项"
             return dev

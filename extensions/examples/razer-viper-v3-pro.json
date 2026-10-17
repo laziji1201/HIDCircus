@@ -1,7 +1,7 @@
 {
   "spec": 1,
   "id": "razer-viper-v3-pro",
-  "name": "Viper V3 Pro 电量（参考实现）",
+  "name": "Viper V3 Pro（电量 + DPI 参考实现）",
   "author": "HIDCircus",
   "match": {
     "vid": "0x1532",
@@ -26,6 +26,21 @@
       "command": "0x07 0x80 0x00 0x00 0x02",
       "reply_check": { "offset": 0, "equals": "0x02" },
       "value": { "offset": 10, "equals": "1" }
+    }
+  },
+  "write": {
+    "set_dpi": {
+      "label": "设置 DPI",
+      "transport": "razer",
+      "command": "0x04 0x05 0x00 0x00 0x07 {u16:x} {u16:y}",
+      "control": {
+        "type": "number",
+        "label": "DPI",
+        "fields": ["x"],
+        "min": 100,
+        "max": 35000,
+        "default": 1000
+      }
     }
   }
 }
