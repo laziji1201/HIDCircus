@@ -31,6 +31,13 @@ echo     Fix - pick one:
 echo       1. Use the HIDCircus shortcut on your Desktop (run setup.bat once)
 echo       2. Open the panel manually: http://127.0.0.1:8777
 echo.
+echo     Or relaunch elevated right now (one UAC prompt, then it works):
+choice /c YN /n /m "Relaunch as administrator? [Y/N] "
+if errorlevel 2 goto low_stay
+powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+exit /b 2
+
+:low_stay
 pause
 exit /b 2
 

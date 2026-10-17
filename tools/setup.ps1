@@ -1,7 +1,7 @@
 ﻿# HIDCircus 开机自启 / 桌面快捷方式（只需运行一次）
 # 用法：setup.bat            安装（开机自启 + 桌面快捷方式）
 #       setup.bat uninstall  卸载
-param([string]$Mode = "install")
+param([string]$Mode = "install", [switch]$Highest)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
