@@ -33,6 +33,24 @@
 - 设备多时列表自然滚动，卡片等高排列
 - 自动刷新间隔可设（5s / 10s / 30s / 关）；插拔设备会立刻刷新
 
+## 快速上手
+
+**便携版**
+
+1. 解压 `HIDCircus-win-x64.zip` 到任意可写目录
+2. 双击 `HIDCircus.exe`（首次可能弹一次 UAC，用于创建托盘图标）
+3. 托盘左键 = 原生面板，右键 = 菜单（主面板 / 刷新 / 退出）
+
+> 启动后**不会自动打开浏览器**。只有点「主面板」时才打开网页版详细设置。
+
+**源码运行**
+
+```powershell
+py -3.10 -m venv .venv
+.\.venv\Scripts\pip install -r requirements.txt
+.\.venv\Scripts\python.exe app.py
+```
+
 ## 一次性配置（推荐先做）
 
 双击 `setup.bat`：注册开机自启 + 桌面快捷方式，之后**每次都按正常权限启动，不会再弹 UAC**。

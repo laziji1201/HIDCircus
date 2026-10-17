@@ -44,6 +44,7 @@ Copy-Item 'extensions\examples\*.json' 'dist\HIDCircus\extensions\examples\' -Fo
 New-Item -ItemType Directory -Force 'dist\HIDCircus\tools' | Out-Null
 Copy-Item 'tools\setup.ps1' 'dist\HIDCircus\tools\setup.ps1' -Force
 Copy-Item 'setup.bat' 'dist\HIDCircus\setup.bat' -Force
+Copy-Item 'tools\launch.bat' 'dist\HIDCircus\tools\launch.bat' -Force
 
 $zip = 'dist\HIDCircus-win-x64.zip'
 Remove-Item $zip -ErrorAction SilentlyContinue

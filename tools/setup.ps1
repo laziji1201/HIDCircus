@@ -63,12 +63,21 @@ try {
 try {
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut($shortcut)
-    $lnk.TargetPath = Join-Path $root 'tools\launch.bat'
-    $lnk.Arguments = ''
-    $lnk.WorkingDirectory = $root
+    if ($exe) {
+        # 打包版：直接指向 exe，图标用它自己内嵌的，永远不会和文件夹里的不一致
+        $lnk.TargetPath = $exe
+        $lnk.Arguments = '--panel'
+        $lnk.WorkingDirectory = $workDir
+        $lnk.IconLocation = "$exe,0"
+    } else {
+        # 源码版：走 launch.bat（自动选任务或直启）
+        $lnk.TargetPath = Join-Path $root 'tools\launch.bat'
+        $lnk.Arguments = ''
+        $lnk.WorkingDirectory = $root
+        $iconIco = Join-Path $root 'assets\icon.ico'
+        if (Test-Path $iconIco) { $lnk.IconLocation = "$iconIco,0" }
+    }
     $lnk.Description = 'HIDCircus 外设控制台'
-    $icon = Join-Path $root 'assets\icon.ico'
-    if (Test-Path $icon) { $lnk.IconLocation = $icon }
     $lnk.Save()
     Write-Host "[OK] 已创建桌面快捷方式：$shortcut"
 } catch {

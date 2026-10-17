@@ -109,7 +109,8 @@ def parent_process():
                       ".Name + '|' + "
                       f"(Get-CimInstance Win32_Process -Filter 'ProcessId={os.getppid()}')"
                       ".CommandLine"],
-                     capture_output=True, text=True, timeout=8)
+                     capture_output=True, text=True, timeout=8,
+                     encoding="utf-8", errors="ignore")
         text = out.stdout.strip()
         return text[:160] if text else "未知"
     except Exception:
@@ -910,8 +911,14 @@ def main():
     _mutex, first = acquire_single_instance()
     running = find_running_port()
     if running:
-        log(f"已有实例在运行（端口 {running}），只负责把面板打开")
-        open_panel(running)      # 低权限也照样试，失败在 open_panel 里兜底提示
+        log(f"已有实例在运行（端口 {running}），叫它把面板弹出来")
+        try:
+            req = urllib.request.Request(
+                f"http://{HOST}:{running}/api/show", data=b"{}", method="POST")
+            req.add_header("Content-Type", "application/json")
+            urllib.request.urlopen(req, timeout=3).read()
+        except Exception:
+            log("提醒运行中实例失败: " + traceback.format_exc())
         return
     if not first:
         log("检测到实例标记但找不到服务，继续启动")
@@ -960,7 +967,13 @@ def main():
     STATUS["tray"] = tray_ok
     log("托盘已就绪" if tray_ok else "托盘不可用，退化为只看窗口")
 
-    threading.Thread(target=open_panel, args=(port,), daemon=True).start()
+    # 启动一律不打开浏览器：浏览器面板只在用户点「主面板」时才出现。
+    # --panel  → 启动后弹出原生面板（桌面快捷方式用）
+    # --silent → 完全静默，只驻留托盘（开机自启用）
+    if "--panel" in sys.argv:
+        threading.Timer(1.2, lambda: show_flyout("panel")).start()
+    else:
+        log("启动完成，驻留托盘（点托盘图标打开面板）")
 
     threading.Thread(target=start_device_watch, daemon=True).start()
 

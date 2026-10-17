@@ -62,7 +62,7 @@ DEFAULT_SETTINGS = {
 STATUS = {"tray": None, "port": None, "log": "", "last_ping": 0.0}
 
 # 页面发过来、由桌面壳（app.py）执行的请求：0 表示没有
-UI_REQUESTS = {"panel": 0.0}
+UI_REQUESTS = {"panel": 0.0, "show": 0.0}
 
 # 本机随机 token：只有页面知道自己该带什么，别的程序随手调不了 /api/control。
 # 注意它只防"顺手误调/顺手乱改"，不是网络级安全（服务只监听 127.0.0.1）。
@@ -370,7 +370,7 @@ class Handler(BaseHTTPRequestHandler):
         raw = self._read_body()
 
         # ping 不校验（心跳要简单可靠），其余写入接口都要
-        if route != "/api/ping" and not self._require_token():
+        if route not in ("/api/ping", "/api/show") and not self._require_token():
             return
 
         if route == "/api/control":
@@ -412,6 +412,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "/api/panel":
             UI_REQUESTS["panel"] = time.time()
+            self._json({"ok": True})
+            return
+        if route == "/api/show":
+            # 重复启动时：让已在运行的实例把原生面板弹出来
+            UI_REQUESTS["show"] = time.time()
             self._json({"ok": True})
             return
         if route == "/api/ping":
