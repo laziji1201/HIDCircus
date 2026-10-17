@@ -49,6 +49,51 @@ _ui_queue = queue.Queue()
 _no_window_tracking = False
 
 
+# ---------------------------------------------------------------- 环境
+
+INTEGRITY_LEVELS = {0x0000: "不可信", 0x1000: "低（受限）", 0x2000: "中",
+                    0x2100: "中+", 0x3000: "高（管理员）", 0x4000: "系统"}
+
+
+def current_integrity():
+    """当前进程的完整性级别。
+
+    低完整性进程（沙箱、某些自动化工具派生出来的）不能和任务栏通信，
+    Shell_NotifyIcon 会返回拒绝访问；拉起的浏览器也可能被提示"实例以提升权限运行"。
+    把级别写进日志，排查时一眼能分辨是环境问题还是代码问题。
+    """
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    advapi32.OpenProcessToken.restype = w.BOOL
+    advapi32.OpenProcessToken.argtypes = [ctypes.c_void_p, w.DWORD,
+                                          ctypes.POINTER(ctypes.c_void_p)]
+    advapi32.GetTokenInformation.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                             ctypes.c_void_p, w.DWORD,
+                                             ctypes.POINTER(w.DWORD)]
+    advapi32.GetSidSubAuthorityCount.restype = ctypes.POINTER(ctypes.c_ubyte)
+    advapi32.GetSidSubAuthorityCount.argtypes = [ctypes.c_void_p]
+    advapi32.GetSidSubAuthority.restype = ctypes.POINTER(w.DWORD)
+    advapi32.GetSidSubAuthority.argtypes = [ctypes.c_void_p, w.DWORD]
+
+    token = ctypes.c_void_p()
+    try:
+        if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x0008,
+                                         ctypes.byref(token)):
+            return None
+        size = w.DWORD(0)
+        advapi32.GetTokenInformation(token, 25, None, 0, ctypes.byref(size))
+        buf = ctypes.create_string_buffer(max(size.value, 16))
+        if not advapi32.GetTokenInformation(token, 25, buf, size.value, ctypes.byref(size)):
+            return None
+        sid = ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p))[0]
+        count = advapi32.GetSidSubAuthorityCount(sid)[0]
+        return advapi32.GetSidSubAuthority(sid, count - 1)[0]
+    except Exception:
+        return None
+    finally:
+        if token:
+            kernel32.CloseHandle(token)
+
+
 # ---------------------------------------------------------------- 日志
 
 def log_dir():
@@ -458,6 +503,11 @@ def main():
     log(f"HTTP 面板: http://{HOST}:{port}")
     log(f"浏览器: {find_browser()[0] or '未找到'}")
     log(f"Python: {sys.executable}")
+    level = current_integrity()
+    log(f"进程完整性: {INTEGRITY_LEVELS.get(level, hex(level) if level else '未知')}")
+    if level is not None and level < 0x2000:
+        log("警告：进程权限被降级，托盘图标和面板窗口很可能不可用；"
+            "请直接双击 run.bat（不要通过自动化工具/沙箱启动）")
 
     # 托盘
     tray_ok = False
