@@ -60,7 +60,7 @@ INTEGRITY_LEVELS = {0x0000: "不可信", 0x1000: "低（受限）", 0x2000: "中
                     0x2100: "中+", 0x3000: "高（管理员）", 0x4000: "系统"}
 
 
-def current_integrity():
+def current_integrity(pid=None):
     """当前进程的完整性级别。
 
     低完整性进程（沙箱、某些自动化工具派生出来的）不能和任务栏通信，
@@ -81,8 +81,9 @@ def current_integrity():
 
     token = ctypes.c_void_p()
     try:
-        if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x0008,
-                                         ctypes.byref(token)):
+        target = kernel32.OpenProcess(0x1000, False, pid) if pid else kernel32.GetCurrentProcess()
+        if not target or not advapi32.OpenProcessToken(target, 0x0008,
+                                                       ctypes.byref(token)):
             return None
         size = w.DWORD(0)
         advapi32.GetTokenInformation(token, 25, None, 0, ctypes.byref(size))
@@ -935,6 +936,7 @@ def main():
     log(f"浏览器: {find_browser()[0] or '未找到'}")
     log(f"Python: {sys.executable}")
     log(f"父进程: {parent_process()}")
+    log(f"父进程权限: {INTEGRITY_LEVELS.get(current_integrity(os.getppid()), '读不到')}")
 
     # 托盘
     tray_ok = False
