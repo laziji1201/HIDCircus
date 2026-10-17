@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PeriDeck</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --line: #262b36;
+    --text: #e6e8ee; --muted: #8b93a7; --accent: #4c8dff;
+    --good: #3ddc84; --warn: #ffb020; --bad: #ff5c5c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    padding: 28px; min-height: 100vh;
+  }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 22px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: .3px; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 14px; padding: 18px;
+  }
+  .card h2 { font-size: 15px; margin: 0 0 4px; }
+  .vendor { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+  .battery { display: flex; align-items: baseline; gap: 6px; }
+  .pct { font-size: 34px; font-weight: 600; line-height: 1; }
+  .pct small { font-size: 15px; color: var(--muted); }
+  .bar { height: 8px; background: #0b0d11; border-radius: 4px; margin: 12px 0 10px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; border-radius: 4px; background: var(--good); transition: width .4s; }
+  .meta { font-size: 12px; color: var(--muted); }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 6px; font-size: 11px; border: 1px solid var(--line); }
+  .tag.good { color: var(--good); border-color: #1e4432; }
+  .tag.warn { color: var(--warn); border-color: #4a3a12; }
+  .tag.bad  { color: var(--bad);  border-color: #4a1e1e; }
+  .controls { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 14px; }
+  .controls h3 { font-size: 12px; color: var(--muted); margin: 0 0 10px; font-weight: 500; }
+  .row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .row label { font-size: 12px; color: var(--muted); width: 44px; flex: none; }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  input[type=color] { width: 40px; height: 26px; border: 1px solid var(--line); background: none; border-radius: 6px; }
+  select, button {
+    background: #0f1218; color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 10px; font-size: 12px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #1a2b4d; border-color: #2b4a80; }
+  .foot { margin-top: 26px; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PeriDeck</h1>
+  <span class="sub">多厂商外设统一面板 · 本地直连 HID，无需厂商软件</span>
+</header>
+
+<div id="grid" class="grid"></div>
+<div class="foot">数据仅在本机处理。设备操作有风险，请自行确认。</div>
+
+<script>
+const MODE_NAMES = { 0: "关闭", 1: "常亮", 2: "呼吸", 3: "闪烁", 4: "色彩循环", 5: "彩虹" };
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function batteryColor(p) {
+  if (p == null) return "var(--muted)";
+  if (p <= 20) return "var(--bad)";
+  if (p <= 50) return "var(--warn)";
+  return "var(--good)";
+}
+
+function cardHTML(d) {
+  const pct = d.battery == null ? "?" : d.battery;
+  const width = d.battery == null ? 0 : Math.max(2, d.battery);
+  const tag = d.note
+    ? `<span class="tag bad">${esc(d.note)}</span>`
+    : d.charging
+      ? `<span class="tag warn">充电中</span>`
+      : `<span class="tag good">已连接</span>`;
+
+  let ctrl = "";
+  if (d.vendor === "ASUS/ROG" && d.extra && d.extra.lighting) {
+    const l = d.extra.lighting;
+    const on = d.extra.lighting_on !== false;
+    ctrl = `
+    <div class="controls">
+      <h3>灯效</h3>
+      <div class="row">
+        <label>模式</label>
+        <select id="mode-${d.id}" ${on ? "" : "disabled"}>
+          ${[1,2,3,4].map(m => `<option value="${m}" ${l.mode === m ? "selected" : ""}>${MODE_NAMES[m]}</option>`).join("")}
+        </select>
+        <button onclick="toggleLighting('${d.id}', ${on})">${on ? "关闭" : "开启"}</button>
+      </div>
+      <div class="row">
+        <label>亮度</label>
+        <input type="range" id="bright-${d.id}" min="0" max="100" value="${l.brightness}">
+        <span class="meta" id="bv-${d.id}">${l.brightness}</span>
+      </div>
+      <div class="row">
+        <label>颜色</label>
+        <input type="color" id="color-${d.id}" value="#${l.color.map(c => c.toString(16).padStart(2,"0")).join("")}">
+        <button onclick="applyLighting('${d.id}')" ${on ? "" : "disabled"}>应用</button>
+      </div>
+    </div>`;
+  }
+
+  return `
+  <div class="card">
+    <h2>${esc(d.name)}</h2>
+    <div class="vendor">${esc(d.vendor)} · ${esc(d.kind)}</div>
+    <div class="battery">
+      <span class="pct" style="color:${batteryColor(d.battery)}">${pct}<small>%</small></span>
+      &nbsp;${tag}
+    </div>
+    <div class="bar"><i style="width:${width}%;background:${batteryColor(d.battery)}"></i></div>
+    <div class="meta">${d.connected === false ? "未连接" : "在线"}</div>
+    ${ctrl}
+  </div>`;
+}
+
+function render(devices) {
+  const grid = document.getElementById("grid");
+  grid.innerHTML = devices.length
+    ? devices.map(cardHTML).join("")
+    : `<div class="card"><h2>没有检测到设备</h2><div class="meta">请确认设备已连接，且厂商软件未占用 HID 通道。</div></div>`;
+  devices.forEach(d => {
+    const b = document.getElementById("bright-" + d.id);
+    if (b) b.addEventListener("input", () => {
+      document.getElementById("bv-" + d.id).textContent = b.value;
+    });
+  });
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/devices");
+    const j = await r.json();
+    render(j.devices || []);
+  } catch (e) {
+    render([]);
+  }
+}
+
+async function postControl(vendor, deviceId, action, payload) {
+  const r = await fetch("/api/control", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      vendor: vendor === "ASUS/ROG" ? "asus" : vendor.toLowerCase(),
+      device_id: deviceId, action, payload
+    })
+  });
+  return r.json();
+}
+
+function applyLighting(id) {
+  const mode = document.getElementById("mode-" + id).value;
+  const bright = document.getElementById("bright-" + id).value;
+  const hex = document.getElementById("color-" + id).value;
+  const color = [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
+  postControl("ASUS/ROG", id, "lighting", { mode: +mode, brightness: +bright, color });
+}
+
+function toggleLighting(id, currentlyOn) {
+  postControl("ASUS/ROG", id, currentlyOn ? "lighting_off" : "lighting_on", {})
+    .then(() => setTimeout(refresh, 300));
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

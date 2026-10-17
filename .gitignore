@@ -1,0 +1,14 @@
+# 虚拟环境
+.venv/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 打包产物
+build/
+dist/
+*.spec
+
+# 临时文件
+.tmp/
