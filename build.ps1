@@ -15,6 +15,8 @@ Write-Host '打包中...'
 .\.venv\Scripts\pyinstaller.exe --noconfirm --clean --onefile --windowed `
     --name HIDCircus `
     --add-data "web;web" `
+    --add-data "assets;assets" `
+    --icon "assets\icon.ico" `
     app.py
 
 if (Test-Path 'dist\HIDCircus.exe') {

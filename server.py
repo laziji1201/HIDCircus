@@ -34,6 +34,7 @@ else:
     BASE_DIR = Path(__file__).resolve().parent
     DATA_DIR = BASE_DIR
 WEB_DIR = BASE_DIR / "web"
+ASSET_DIR = BASE_DIR / "assets"
 CONFIG_PATH = DATA_DIR / "config.json"
 BACKGROUND_DIR = DATA_DIR / "assets" / "background"
 
@@ -53,6 +54,9 @@ DEFAULT_SETTINGS = {
 
 # 运行状态（app.py 启动后回填，供页面显示托盘是否可用）
 STATUS = {"tray": None, "port": None, "log": "", "last_ping": 0.0}
+
+# 页面发过来、由桌面壳（app.py）执行的请求：0 表示没有
+UI_REQUESTS = {"panel": 0.0, "flyout_close": 0.0}
 
 _scan_lock = threading.Lock()
 _cache = {"at": 0.0, "devices": []}
@@ -262,6 +266,14 @@ class Handler(BaseHTTPRequestHandler):
             name = Path(unquote(route.rsplit("/", 1)[-1])).name
             self._serve_file(BACKGROUND_DIR / name)
             return
+        if route.startswith("/assets/"):
+            rel = unquote(route[len("/assets/"):])
+            target = (ASSET_DIR / rel).resolve()
+            if ASSET_DIR.resolve() not in target.parents or not target.is_file():
+                self._json({"error": "not found"}, 404)
+                return
+            self._serve_file(target)
+            return
         if route.startswith("/web/"):
             target = self._safe_web_path(route[len("/web/"):])
             if target is None:
@@ -307,6 +319,14 @@ class Handler(BaseHTTPRequestHandler):
             self._save_background(raw)
             return
 
+        if route == "/api/panel":
+            UI_REQUESTS["panel"] = time.time()
+            self._json({"ok": True})
+            return
+        if route == "/api/flyout/close":
+            UI_REQUESTS["flyout_close"] = time.time()
+            self._json({"ok": True})
+            return
         if route == "/api/ping":
             STATUS["last_ping"] = time.time()
             self._json({"ok": True})

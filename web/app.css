@@ -1179,3 +1179,101 @@ html[data-palette="neon"][data-theme="light"] {
   background: var(--accent-soft);
   color: var(--accent);
 }
+
+/* ============================ 托盘小面板 ============================ */
+
+body.is-flyout { background: var(--bg); }
+body.is-flyout .shell { display: none; }
+body.is-flyout .flyout { display: flex; }
+
+.flyout {
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+  width: 100vw;
+  min-width: 0;
+  height: 100vh;
+  padding: 12px;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
+}
+
+.flyout-head { display: flex; align-items: center; gap: 9px; }
+.flyout-mark { width: 26px; height: 26px; border-radius: 7px; }
+.flyout-title { display: flex; flex-direction: column; line-height: 1.2; }
+.flyout-title strong { font-size: 13px; font-weight: 650; }
+.flyout-title span { font-size: 10.5px; color: var(--text-3); }
+.flyout-close {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.flyout-close:hover { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
+
+body.is-flyout { overflow: hidden; }
+
+.flyout-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
+}
+.flyout-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+  border: 1px solid var(--line);
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.flyout-item:hover { border-color: var(--line-2); background: color-mix(in srgb, var(--surface-2) 92%, transparent); }
+.flyout-item .vdot { width: 6px; height: 6px; }
+.flyout-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flyout-pct {
+  flex: none;
+  margin-left: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.3px;
+}
+.flyout-state {
+  flex: none;
+  max-width: 46px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--text-3);
+  text-align: right;
+}
+
+.flyout-foot { margin-top: auto; display: flex; gap: 8px; }
+.flyout-foot .btn { flex: 1; }
+
+/* 侧栏品牌图 */
+img.mark { object-fit: contain; background: transparent; box-shadow: none; }

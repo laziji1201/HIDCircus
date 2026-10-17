@@ -18,6 +18,8 @@ window.I18N = {
     "stat.unit": " 台",
     "stat.low": "最低",
 
+    "flyout.sub": "电量一览",
+    "flyout.open": "打开主面板",
     "action.refresh": "刷新",
     "action.apply": "应用",
     "action.on": "开启",
@@ -120,6 +122,8 @@ window.I18N = {
     "stat.unit": " devices",
     "stat.low": "low",
 
+    "flyout.sub": "Battery at a glance",
+    "flyout.open": "Open panel",
     "action.refresh": "Refresh",
     "action.apply": "Apply",
     "action.on": "On",

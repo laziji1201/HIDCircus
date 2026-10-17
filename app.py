@@ -33,7 +33,8 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from server import create_server, collect_devices, STATUS, HOST, PORT, PORT_TRIES
+from server import (create_server, collect_devices, STATUS, UI_REQUESTS,
+                    HOST, PORT, PORT_TRIES)
 from tray import Tray
 
 APP_NAME = "HIDCircus"
@@ -169,26 +170,48 @@ def log(msg):
 
 # ---------------------------------------------------------------- 托盘图标
 
+ICON_PATH = ROOT / "assets" / "icon.png"
+_ICON_BASE = None
+
+
+def _icon_base():
+    global _ICON_BASE
+    if _ICON_BASE is None:
+        try:
+            _ICON_BASE = Image.open(ICON_PATH).convert("RGBA")
+        except Exception:
+            _ICON_BASE = False
+            log("图标文件读不到，托盘退回默认画法")
+    return _ICON_BASE or None
+
+
 def make_icon(battery):
-    """圆环 + 电量数字，按低电量变色。"""
+    """托盘图标：用设计稿图标，低电量时右下角加个红点。"""
     size = 64
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    if battery is None:
-        color, text = (154, 154, 164), "--"
+    base = _icon_base()
+    if base is not None:
+        img = base.resize((size, size), Image.LANCZOS)
     else:
-        color = (61, 220, 132) if battery > 50 else (
+        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        color = (61, 220, 132) if battery is None or battery > 50 else (
             (251, 191, 36) if battery > 20 else (248, 113, 113))
-        text = str(battery)
-    d.ellipse((3, 3, size - 3, size - 3), outline=color, width=5)
-    try:
-        f = ImageFont.truetype(FONT_PATH, 28 if len(text) > 1 else 32)
-    except Exception:
-        f = ImageFont.load_default()
-    box = d.textbbox((0, 0), text, font=f)
-    tw, th = box[2] - box[0], box[3] - box[1]
-    d.text(((size - tw) / 2 - box[0], (size - th) / 2 - box[1]),
-           text, font=f, fill=color)
+        d.ellipse((3, 3, size - 3, size - 3), outline=color, width=5)
+        if battery is not None:
+            try:
+                f = ImageFont.truetype(FONT_PATH, 28 if battery > 99 else 32)
+            except Exception:
+                f = ImageFont.load_default()
+            text = str(battery)
+            box = d.textbbox((0, 0), text, font=f)
+            d.text(((size - (box[2] - box[0])) / 2 - box[0],
+                    (size - (box[3] - box[1])) / 2 - box[1]), text, font=f, fill=color)
+        return img
+
+    if battery is not None and battery <= 20:
+        d = ImageDraw.Draw(img)
+        d.ellipse((size - 22, size - 22, size - 2, size - 2),
+                  fill=(248, 113, 113, 255), outline=(15, 15, 18, 255), width=3)
     return img
 
 
@@ -321,6 +344,40 @@ def kill_stale_browsers(profile: Path):
         pass
 
 
+EDGE_BROWSER_FLAGS = [
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-sync",                 # 别把系统账号同步进我们的独立配置
+    "--no-service-autorun",
+    "--disable-session-crashed-bubble",
+    "--hide-crash-restore-bubble",
+    "--disable-features=Translate,MediaRouter,msEdgeSyncPromo",
+    "--no-proxy-server",              # 本机回环不该走代理
+]
+
+
+def seed_profile(profile: Path):
+    """给独立配置目录预置偏好，压掉 Edge 的登录/同步/首次运行气泡。
+
+    这些只作用于我们自己那份配置，不动用户平时用的 Edge。
+    """
+    default = profile / "Default"
+    prefs = default / "Preferences"
+    if prefs.exists():
+        return
+    try:
+        default.mkdir(parents=True, exist_ok=True)
+        prefs.write_text(json.dumps({
+            "sync": {"disabled": True},
+            "signin": {"allowed": False, "allowed_on_next_startup": False},
+            "browser": {"has_seen_welcome_page": True},
+            "profile": {"exit_type": "Normal", "exited_cleanly": True},
+            "edge": {"first_run_completed": True},
+        }), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def clean_profile_state(profile: Path):
     """清掉会话恢复文件（被强杀后留下的"崩溃会话"会让新窗口卡在错误页）。"""
     default = profile / "Default"
@@ -357,17 +414,13 @@ def _spawn_window(browser, url, profile: Path, wipe=False, extra=()):
     kill_stale_browsers(profile)
     if not wipe:
         clean_profile_state(profile)
+    seed_profile(profile)
 
     args = [
         browser,
         f"--app={url}",
         f"--user-data-dir={profile}",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-session-crashed-bubble",
-        "--hide-crash-restore-bubble",
-        "--disable-features=Translate,MediaRouter",
-        "--no-proxy-server",
+        *EDGE_BROWSER_FLAGS,
         "--window-size=1180,820",
         "--window-position=140,90",
         *extra,
@@ -426,6 +479,107 @@ def open_panel(port):
     return False
 
 
+FLYOUT_SIZE = (376, 440)
+_flyout = {"hwnd": None}
+_handled = {"panel": 0.0, "flyout_close": 0.0}
+
+
+def _cursor_pos():
+    pt = w.POINT()
+    user32.GetCursorPos(ctypes.byref(pt))
+    return pt.x, pt.y
+
+
+def flyout_windows():
+    return [hwnd for hwnd, title in _enum_windows()
+            if title.startswith(APP_NAME + " 状态")]
+
+
+def close_flyout():
+    for hwnd in flyout_windows():
+        user32.PostMessageW(hwnd, 0x0010, 0, 0)     # WM_CLOSE
+    _flyout["hwnd"] = None
+
+
+def _watch_flyout(hwnd):
+    """小面板一失去焦点就收起。"""
+    time.sleep(0.8)
+    while _flyout.get("hwnd") == hwnd and not _stop.is_set():
+        if not user32.IsWindow(hwnd):
+            break
+        if user32.GetForegroundWindow() != hwnd:
+            time.sleep(0.45)
+            if user32.GetForegroundWindow() != hwnd:
+                user32.PostMessageW(hwnd, 0x0010, 0, 0)
+                break
+        time.sleep(0.2)
+    if _flyout.get("hwnd") == hwnd:
+        _flyout["hwnd"] = None
+
+
+def open_flyout(port):
+    """左键点托盘：在鼠标上方弹出小面板；再点一次收起。"""
+    if flyout_windows():
+        close_flyout()
+        return
+    name, browser = find_browser()
+    if not browser:
+        open_panel(port)
+        return
+
+    width, height = FLYOUT_SIZE
+    screen_w = user32.GetSystemMetrics(0)
+    screen_h = user32.GetSystemMetrics(1)
+    cx, cy = _cursor_pos()
+    left = max(8, min(cx - width // 2, screen_w - width - 8))
+    top = cy - height - 12
+    if top < 8:
+        top = min(cy + 12, screen_h - height - 8)
+
+    profile = ROOT / ".runtime" / "browser-profile"
+    profile.mkdir(parents=True, exist_ok=True)
+    seed_profile(profile)
+    args = [
+        browser,
+        f"--app=http://{HOST}:{port}/#flyout",
+        f"--user-data-dir={profile}",
+        *EDGE_BROWSER_FLAGS,
+        f"--window-size={width},{height}",
+        f"--window-position={left},{top}",
+    ]
+    try:
+        subprocess.Popen(args, close_fds=True,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        log("小面板启动失败: " + traceback.format_exc())
+        return
+
+    deadline = time.time() + 6
+    hwnd = None
+    while time.time() < deadline and not _stop.is_set():
+        found = flyout_windows()
+        if found:
+            hwnd = found[0]
+            break
+        time.sleep(0.2)
+    if hwnd:
+        _flyout["hwnd"] = hwnd
+        threading.Thread(target=_watch_flyout, args=(hwnd,), daemon=True).start()
+    else:
+        log("小面板窗口没出现（浏览器可能被挡）")
+
+
+def handle_ui_requests():
+    """页面按钮发过来的请求：打开主面板 / 关闭小面板。"""
+    if UI_REQUESTS["panel"] > _handled["panel"]:
+        _handled["panel"] = UI_REQUESTS["panel"]
+        close_flyout()
+        _ui_queue.put(lambda: open_panel(PORT_HOLDER["port"]))
+    if UI_REQUESTS["flyout_close"] > _handled["flyout_close"]:
+        _handled["flyout_close"] = UI_REQUESTS["flyout_close"]
+        close_flyout()
+
+
 def close_panel():
     """退出时关掉我们开的面板窗口，别留一个连不上后端的空壳。"""
     for hwnd in panel_windows():
@@ -460,6 +614,10 @@ def on_refresh(icon=None, item=None):
 def pump():
     """主循环里执行队列中的动作（托盘回调在自己的线程）。"""
     while not _stop.is_set():
+        try:
+            handle_ui_requests()
+        except Exception:
+            log("处理页面请求异常: " + traceback.format_exc())
         try:
             _ui_queue.get(timeout=0.2)()
         except queue.Empty:
@@ -564,8 +722,9 @@ def main():
     tray_ok = False
     try:
         _icon = Tray(make_icon(None), APP_NAME,
-                     [("打开面板", on_open), ("刷新电量", on_refresh), ("退出", quit_app)],
-                     on_click=on_open)
+                     [("打开主面板", on_open), ("刷新电量", on_refresh), ("退出", quit_app)],
+                     on_click=lambda: _ui_queue.put(
+                         lambda: open_flyout(PORT_HOLDER["port"])))
         tray_ok = _icon.start()
         if not tray_ok:
             log(f"托盘创建失败（Shell_NotifyIcon 错误码 {getattr(_icon, 'last_error', '?')}）")
