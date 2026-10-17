@@ -34,7 +34,8 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from server import (create_server, collect_devices, load_settings, STATUS, UI_REQUESTS,
+from server import (create_server, collect_devices, do_control, load_settings,
+                    STATUS, UI_REQUESTS,
                     HOST, PORT, PORT_TRIES)
 from flyout import Flyout
 from tray import Tray
@@ -691,10 +692,24 @@ def flyout_colors():
                              FLYOUT_COLORS[("dark", "amber")])
 
 
-def show_flyout():
-    """左键托盘：原生小面板（不走浏览器，几十毫秒就出来）。"""
+def _panel_control(device_id, action):
+    """原生面板上的按钮：查设备所属 provider 再下发动作。"""
+    try:
+        devices = collect_devices()
+        dev = next((d for d in devices if d.get("id") == device_id), None)
+        if dev is None:
+            return
+        vendor = dev.get("vendor_key", "")
+        result = do_control(vendor, device_id, action, {})
+        log(f"面板控制 {device_id} {action} -> {result}")
+        collect_devices(force=True)
+    except Exception:
+        log("面板控制异常: " + traceback.format_exc())
+
+
+def show_flyout(mode="panel"):
+    """托盘左键：原生面板（不走浏览器）。再点一次收起。"""
     global _flyout_open
-    # 已经开着就收起（再点一次开关）
     existing = user32.FindWindowW("HIDCircusFlyout", None)
     if existing:
         user32.PostMessageW(ctypes.c_void_p(existing), 0x0010, 0, 0)
@@ -703,11 +718,11 @@ def show_flyout():
         return
     _flyout_open = True
     try:
-        Flyout(collect_devices, lambda: _ui_queue.put(
-                   lambda: open_panel(PORT_HOLDER["port"])),
-               None, flyout_colors()).show()
+        Flyout(collect_devices,
+               lambda: _ui_queue.put(lambda: open_panel(PORT_HOLDER["port"])),
+               None, flyout_colors(), mode=mode, on_control=_panel_control).show()
     except Exception:
-        log("小面板异常: " + traceback.format_exc())
+        log("原生面板异常: " + traceback.format_exc())
     finally:
         _flyout_open = False
 
@@ -874,7 +889,11 @@ def main():
     tray_ok = False
     try:
         _icon = Tray(make_icon(None), APP_NAME,
-                     [("打开主面板", on_open), ("刷新电量", on_refresh), ("退出", quit_app)],
+                     [("打开面板", lambda *_: threading.Thread(
+                         target=show_flyout, daemon=True).start()),
+                      ("详细设置（网页版）", on_open),
+                      ("刷新电量", on_refresh),
+                      ("退出", quit_app)],
                      on_click=lambda: threading.Thread(
                          target=show_flyout, daemon=True).start())
         tray_ok = _icon.start()

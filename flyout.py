@@ -118,7 +118,16 @@ class Flyout:
     HEAD_H = 56
     FOOT_H = 46
 
-    def __init__(self, devices_fn, on_open_panel, on_refresh, colors):
+    # panel 模式用的大尺寸
+    PANEL_WIDTH = 460
+    PANEL_ROW_H = 62
+    PANEL_HEAD_H = 64
+    PANEL_FOOT_H = 52
+
+    def __init__(self, devices_fn, on_open_panel, on_refresh, colors,
+                 mode="flyout", on_control=None):
+        self.mode = mode
+        self._on_control = on_control       # (device_id, action) -> None
         self._devices_fn = devices_fn
         self._on_open_panel = on_open_panel
         self._on_refresh = on_refresh
@@ -203,11 +212,30 @@ class Flyout:
 
     def _size(self):
         rows = max(1, len(self._devices))
+        long_rows = 0
+        if self.mode == "panel":
+            for d in self._devices:
+                if self._has_control(d):
+                    long_rows += 1
         scale = 1.15 if user32.GetSystemMetrics(0) >= 2400 else 1.0
         self._scale = scale
+        if self.mode == "panel":
+            width = int(self.PANEL_WIDTH * scale)
+            height = int((self.PANEL_HEAD_H + rows * self.PANEL_ROW_H
+                          + long_rows * 30 + self.PANEL_FOOT_H + 16) * scale)
+            return width, max(height, int(240 * scale))
         width = int(self.WIDTH * scale)
         height = int((self.HEAD_H + rows * self.ROW_H + self.FOOT_H + 14) * scale)
         return width, height
+
+    @staticmethod
+    def _has_control(d):
+        """这台设备有没有可以直接点的控制（目前：ASUS 灯效、扩展控件）。"""
+        extra = d.get("extra") or {}
+        if extra.get("lighting"):
+            return True
+        info = extra.get("extension") or {}
+        return bool(info.get("controls"))
 
     def _cursor(self):
         pt = w.POINT()
@@ -263,6 +291,20 @@ class Flyout:
                 self._refresh_rows()
                 user32.InvalidateRect(hwnd, None, False)
                 return 0
+            if hit and hit.startswith("ctl:"):
+                _, device_id, action = hit.split(":", 2)
+                if self._on_control:
+                    self._on_control(device_id, action)
+                user32.InvalidateRect(hwnd, None, False)
+                return 0
+            if hit == "close":
+                user32.DestroyWindow(hwnd)
+                return 0
+            if hit == "web":
+                user32.DestroyWindow(hwnd)
+                if self._on_open_panel:
+                    self._on_open_panel()
+                return 0
             if hit == "open":
                 user32.DestroyWindow(hwnd)
                 if self._on_open_panel:
@@ -294,11 +336,16 @@ class Flyout:
         return None
 
     def _paint(self, hwnd):
+        if self.mode == "panel":
+            self._paint_panel(hwnd)
+            return
         ps = ctypes.create_string_buffer(64)          # PAINTSTRUCT
         hdc = user32.BeginPaint(hwnd, ps)
         try:
             scale = self._dpi_scale(hwnd)
-            width, height = self._size()
+            client = w.RECT()
+            user32.GetClientRect(hwnd, ctypes.byref(client))
+            width, height = client.right, client.bottom
             c = self._colors
 
             bg = gdi32.CreateSolidBrush(_rgb(*c["bg"]))
@@ -397,6 +444,155 @@ class Flyout:
         finally:
             user32.EndPaint(hwnd, ps)
 
+    # ---------------- panel 模式 ----------------
+
+    def _paint_panel(self, hwnd):
+        ps = ctypes.create_string_buffer(64)
+        hdc = user32.BeginPaint(hwnd, ps)
+        try:
+            scale = self._dpi_scale(hwnd)
+            client = w.RECT()
+            user32.GetClientRect(hwnd, ctypes.byref(client))
+            width, height = client.right, client.bottom
+            c = self._colors
+
+            bg = gdi32.CreateSolidBrush(_rgb(*c["bg"]))
+            gdi32.SelectObject(hdc, bg)
+            pen = gdi32.CreatePen(PS_SOLID, 1, _rgb(*c["line"]))
+            gdi32.SelectObject(hdc, pen)
+            gdi32.RoundRect(hdc, 0, 0, width, height, int(14 * scale), int(14 * scale))
+            gdi32.SetBkMode(hdc, TRANSPARENT)
+
+            font_title = gdi32.CreateFontW(int(-17 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
+                                           0, 0, 0, 0, 0, "Microsoft YaHei UI")
+            font_sub = gdi32.CreateFontW(int(-11 * scale), 0, 0, 0, 400, 0, 0, 0,
+                                         0, 0, 0, 0, 0, "Microsoft YaHei UI")
+            font_name = gdi32.CreateFontW(int(-14 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
+                                          0, 0, 0, 0, 0, "Microsoft YaHei UI")
+            font_small = gdi32.CreateFontW(int(-11 * scale), 0, 0, 0, 400, 0, 0, 0,
+                                           0, 0, 0, 0, 0, "Microsoft YaHei UI")
+            font_pct = gdi32.CreateFontW(int(-20 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
+                                         0, 0, 0, 0, 0, "Segoe UI")
+
+            gdi32.SelectObject(hdc, font_title)
+            gdi32.SetTextColor(hdc, _rgb(*c["text"]))
+            self._text(hdc, "HIDCircus", int(18 * scale), int(12 * scale),
+                       width - int(120 * scale), int(24 * scale), DT_LEFT)
+
+            gdi32.SelectObject(hdc, font_sub)
+            gdi32.SetTextColor(hdc, _rgb(*c["muted"]))
+            self._text(hdc, "外设控制台", int(18 * scale), int(38 * scale),
+                       width - int(120 * scale), int(16 * scale), DT_LEFT)
+
+            # 右上角：刷新按钮
+            refresh = (width - int(80 * scale), int(14 * scale),
+                       width - int(16 * scale), int(42 * scale))
+            self._rows = [(*refresh, "refresh")]
+
+            y = int(self.PANEL_HEAD_H * scale)
+            for d in self._devices:
+                row_h = int(self.PANEL_ROW_H * scale)
+                extra = d.get("extra") or {}
+                hue = VENDOR_HUE.get(d.get("vendor_key", ""), (160, 160, 170))
+                dot_x = int(20 * scale)
+                cy = y + int(14 * scale)
+
+                brush = gdi32.CreateSolidBrush(_rgb(*hue))
+                gdi32.SelectObject(hdc, brush)
+                r = int(4 * scale)
+                gdi32.Ellipse(hdc, dot_x - r, cy - r, dot_x + r, cy + r)
+                gdi32.DeleteObject(brush)
+
+                gdi32.SelectObject(hdc, font_name)
+                gdi32.SetTextColor(hdc, _rgb(*c["text"]))
+                self._text(hdc, str(d.get("name", "?"))[:22], int(32 * scale),
+                           y + int(2 * scale), width - int(140 * scale), int(20 * scale),
+                           DT_LEFT)
+
+                gdi32.SelectObject(hdc, font_small)
+                gdi32.SetTextColor(hdc, _rgb(*c["muted"]))
+                kind = {"mouse": "鼠标", "keyboard": "键盘", "headset": "耳机"}.get(
+                    d.get("kind"), "设备")
+                state = "充电中" if d.get("charging") else ("已连接" if d.get("connected", True) else "离线")
+                self._text(hdc, f"{kind} · {state}", int(32 * scale), y + int(24 * scale),
+                           width - int(140 * scale), int(16 * scale), DT_LEFT)
+
+                battery = d.get("battery")
+                if battery is None:
+                    color, label = c["muted"], "—"
+                else:
+                    color = (c["bad"] if battery <= 20 else
+                             c["warn"] if battery <= 50 else c["ok"])
+                    label = f"{battery}%"
+                gdi32.SelectObject(hdc, font_pct)
+                gdi32.SetTextColor(hdc, _rgb(*color))
+                self._text(hdc, label, width - int(92 * scale), y,
+                           int(74 * scale), int(40 * scale), DT_RIGHT)
+
+                ctrl_y = y + int(44 * scale)
+                if extra.get("lighting"):
+                    on = extra.get("lighting_on")
+                    for idx, (label, action) in enumerate((("开", "lighting_on"),
+                                                           ("关", "lighting_off"))):
+                        bx = int(32 * scale) + idx * int(46 * scale)
+                        rect = (bx, ctrl_y, bx + int(40 * scale),
+                                ctrl_y + int(22 * scale))
+                        active = (action == "lighting_on" and on) or (
+                            action == "lighting_off" and on is False)
+                        fill = gdi32.CreateSolidBrush(
+                            _rgb(*(c["accent"] if active else c["btn"])))
+                        gdi32.SelectObject(hdc, fill)
+                        gdi32.RoundRect(hdc, rect[0], rect[1], rect[2], rect[3],
+                                        int(6 * scale), int(6 * scale))
+                        gdi32.DeleteObject(fill)
+                        gdi32.SelectObject(hdc, font_small)
+                        gdi32.SetTextColor(hdc, _rgb(*(c["accent_ink"] if active else c["text"])))
+                        self._text(hdc, label, rect[0], rect[1], rect[2] - rect[0],
+                                   rect[3] - rect[1], DT_LEFT | DT_VCENTER | 0x0001)
+                        self._rows.append((*rect, f"ctl:{d.get('id')}:{action}"))
+                    gdi32.SelectObject(hdc, font_small)
+                    gdi32.SetTextColor(hdc, _rgb(*c["muted"]))
+                    self._text(hdc, "灯效", int(32 * scale) + int(96 * scale),
+                               ctrl_y, int(60 * scale), int(22 * scale),
+                               DT_LEFT | DT_VCENTER)
+
+                y += row_h + (int(30 * scale) if (extra.get("lighting")) else 0)
+
+            # 底部：打开网页版 / 关闭
+            ly = height - int(self.PANEL_FOOT_H * scale)
+            pen2 = gdi32.CreatePen(PS_SOLID, 1, _rgb(*c["line"]))
+            gdi32.SelectObject(hdc, pen2)
+            gdi32.MoveToEx(hdc, int(16 * scale), ly, None)
+            gdi32.LineTo(hdc, width - int(16 * scale), ly)
+
+            btn_h = int(28 * scale)
+            by = ly + int(12 * scale)
+            half = (width - int(44 * scale)) // 2
+            web_rect = (int(16 * scale), by, int(16 * scale) + half, by + btn_h)
+            close_rect = (web_rect[2] + int(12 * scale), by, width - int(16 * scale), by + btn_h)
+            self._rows.append((*web_rect, "web"))
+            self._rows.append((*close_rect, "close"))
+
+            for rect, label, active in ((web_rect, "详细设置（网页版）", False),
+                                        (close_rect, "关闭", True)):
+                fill = gdi32.CreateSolidBrush(_rgb(*(c["accent"] if active else c["btn"])))
+                gdi32.SelectObject(hdc, fill)
+                gdi32.RoundRect(hdc, rect[0], rect[1], rect[2], rect[3],
+                                int(8 * scale), int(8 * scale))
+                gdi32.DeleteObject(fill)
+                gdi32.SelectObject(hdc, font_small)
+                gdi32.SetTextColor(hdc, _rgb(*(c["accent_ink"] if active else c["text"])))
+                self._text(hdc, label, rect[0], rect[1], rect[2] - rect[0], btn_h,
+                           DT_LEFT | DT_VCENTER, center=True)
+
+            for f in (font_title, font_sub, font_name, font_small, font_pct):
+                gdi32.DeleteObject(f)
+            gdi32.DeleteObject(pen)
+            gdi32.DeleteObject(pen2)
+            gdi32.DeleteObject(bg)
+        finally:
+            user32.EndPaint(hwnd, ps)
+
     @staticmethod
     def _text(hdc, text, x, y, cx, cy, flags, center=False):
         buf = ctypes.create_unicode_buffer(text)
@@ -414,6 +610,7 @@ user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 kernel32.GetModuleHandleW.restype = w.HINSTANCE
 kernel32.GetModuleHandleW.argtypes = [w.LPCWSTR]
 user32.PostQuitMessage.argtypes = [ctypes.c_int]
+user32.GetClientRect.argtypes = [w.HWND, ctypes.POINTER(w.RECT)]
 user32.GetForegroundWindow.restype = w.HWND
 user32.GetAsyncKeyState.restype = ctypes.c_short
 user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
