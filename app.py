@@ -33,8 +33,9 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from server import (create_server, collect_devices, STATUS, UI_REQUESTS,
+from server import (create_server, collect_devices, load_settings, STATUS, UI_REQUESTS,
                     HOST, PORT, PORT_TRIES)
+from flyout import Flyout
 from tray import Tray
 
 APP_NAME = "HIDCircus"
@@ -48,7 +49,8 @@ _icon = None
 _stop = threading.Event()
 _ui_queue = queue.Queue()
 _no_window_tracking = False
-_low_integrity = False          # 低权限下无边框窗口必然失败，直接跳过
+_low_integrity = False
+_flyout_open = False          # 低权限下无边框窗口必然失败，直接跳过
 
 
 # ---------------------------------------------------------------- 环境
@@ -393,6 +395,19 @@ def clean_profile_state(profile: Path):
             pass
 
 
+def _elevation_dialog():
+    """有没有 Edge 弹出的"现有实例正在以提升的权限运行"对话框。
+
+    有的话继续重试只会弹更多一模一样的窗口，必须立刻停手。
+    """
+    for hwnd, title in _enum_windows():
+        if title.strip() != "Microsoft Edge":
+            continue
+        if _process_name(hwnd) == "msedge.exe":
+            return True
+    return False
+
+
 def page_alive(since):
     """页面有没有在 since 之后回过心跳。"""
     return (STATUS.get("last_ping") or 0) >= since
@@ -451,8 +466,7 @@ def open_panel(port):
     if browser and not _low_integrity:
         profile = ROOT / ".runtime" / "browser-profile"
         for label, kwargs in (("现有配置", {"wipe": False}),
-                              ("清空配置副本", {"wipe": True}),
-                              ("关闭 GPU", {"wipe": True, "extra": ("--disable-gpu",)})):
+                              ("清空配置副本", {"wipe": True})):
             since = time.time()
             log(f"尝试无边框窗口（{name} · {label}）")
             if not _spawn_window(browser, url, profile, **kwargs):
@@ -460,7 +474,13 @@ def open_panel(port):
             if wait_for_page(since, 12):
                 log(f"面板已就绪（{name} 无边框窗口）: {url}")
                 return True
-            log(f"{label} 没收到页面心跳，换下一档")
+            log(f"{label} 没收到页面心跳")
+            if _elevation_dialog():
+                log("检测到 Edge 的「现有实例正在以提升的权限运行」对话框："
+                    "说明有以管理员权限运行的 Edge 占用了本工具的配置目录。"
+                    "请关闭那个 Edge 窗口（或结束它）后重试，已停止继续弹窗")
+                break
+            log("换下一档重试")
 
     global _no_window_tracking
     _no_window_tracking = True
@@ -490,11 +510,6 @@ def _cursor_pos():
     return pt.x, pt.y
 
 
-def flyout_windows():
-    return [hwnd for hwnd, title in _enum_windows()
-            if title.startswith(APP_NAME + " 状态")]
-
-
 def close_flyout():
     for hwnd in flyout_windows():
         user32.PostMessageW(hwnd, 0x0010, 0, 0)     # WM_CLOSE
@@ -517,56 +532,84 @@ def _watch_flyout(hwnd):
         _flyout["hwnd"] = None
 
 
-def open_flyout(port):
-    """左键点托盘：在鼠标上方弹出小面板；再点一次收起。"""
-    if flyout_windows():
-        close_flyout()
-        return
-    name, browser = find_browser()
-    if not browser:
-        open_panel(port)
-        return
-
-    width, height = FLYOUT_SIZE
-    screen_w = user32.GetSystemMetrics(0)
-    screen_h = user32.GetSystemMetrics(1)
-    cx, cy = _cursor_pos()
-    left = max(8, min(cx - width // 2, screen_w - width - 8))
-    top = cy - height - 12
-    if top < 8:
-        top = min(cy + 12, screen_h - height - 8)
-
-    profile = ROOT / ".runtime" / "browser-profile"
-    profile.mkdir(parents=True, exist_ok=True)
-    seed_profile(profile)
-    args = [
-        browser,
-        f"--app=http://{HOST}:{port}/flyout",
-        f"--user-data-dir={profile}",
-        *EDGE_BROWSER_FLAGS,
-        f"--window-size={width},{height}",
-        f"--window-position={left},{top}",
-    ]
+def _system_is_dark():
+    """系统主题是深色还是浅色（主题设为 auto 时用）。"""
     try:
-        subprocess.Popen(args, close_fds=True,
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+            value, _ = winreg.QueryValueEx(k, "AppsUseLightTheme")
+            return value == 0
     except Exception:
-        log("小面板启动失败: " + traceback.format_exc())
-        return
+        return True
 
-    deadline = time.time() + 6
-    hwnd = None
-    while time.time() < deadline and not _stop.is_set():
-        found = flyout_windows()
-        if found:
-            hwnd = found[0]
-            break
-        time.sleep(0.2)
-    if hwnd:
-        _flyout["hwnd"] = hwnd
-        threading.Thread(target=_watch_flyout, args=(hwnd,), daemon=True).start()
-    else:
-        log("小面板窗口没出现（浏览器可能被挡）")
+
+FLYOUT_COLORS = {
+    ("dark", "amber"): dict(bg=(18, 18, 21), line=(35, 35, 41), text=(236, 236, 239),
+                            muted=(139, 139, 150), ok=(74, 222, 128), warn=(251, 191, 36),
+                            bad=(248, 113, 113), accent=(242, 163, 60),
+                            accent_ink=(29, 19, 4), btn=(32, 32, 38)),
+    ("dark", "silver"): dict(bg=(17, 17, 21), line=(42, 42, 49), text=(236, 236, 241),
+                             muted=(164, 164, 174), ok=(74, 222, 128), warn=(251, 191, 36),
+                             bad=(248, 113, 113), accent=(201, 201, 211),
+                             accent_ink=(19, 19, 23), btn=(35, 35, 41)),
+    ("dark", "sakura"): dict(bg=(26, 21, 23), line=(56, 46, 50), text=(244, 236, 238),
+                             muted=(185, 169, 174), ok=(74, 222, 128), warn=(251, 191, 36),
+                             bad=(248, 113, 113), accent=(251, 177, 197),
+                             accent_ink=(58, 26, 36), btn=(46, 37, 41)),
+    ("dark", "neon"): dict(bg=(10, 10, 16), line=(37, 37, 58), text=(238, 244, 246),
+                           muted=(154, 168, 180), ok=(124, 255, 203), warn=(251, 191, 36),
+                           bad=(255, 53, 102), accent=(82, 255, 233),
+                           accent_ink=(4, 33, 31), btn=(29, 29, 42)),
+    ("light", "amber"): dict(bg=(252, 251, 248), line=(229, 226, 219), text=(23, 23, 26),
+                             muted=(110, 110, 116), ok=(21, 128, 61), warn=(180, 83, 9),
+                             bad=(185, 28, 28), accent=(188, 114, 18),
+                             accent_ink=(255, 255, 255), btn=(242, 240, 234)),
+    ("light", "silver"): dict(bg=(252, 252, 253), line=(228, 228, 233), text=(24, 24, 28),
+                              muted=(91, 91, 102), ok=(21, 128, 61), warn=(180, 83, 9),
+                              bad=(185, 28, 28), accent=(76, 76, 88),
+                              accent_ink=(255, 255, 255), btn=(241, 241, 244)),
+    ("light", "sakura"): dict(bg=(251, 249, 247), line=(232, 228, 224), text=(42, 38, 40),
+                              muted=(110, 104, 108), ok=(21, 128, 61), warn=(180, 83, 9),
+                              bad=(185, 28, 28), accent=(217, 121, 143),
+                              accent_ink=(255, 255, 255), btn=(242, 240, 236)),
+    ("light", "neon"): dict(bg=(250, 253, 253), line=(220, 232, 232), text=(16, 32, 42),
+                            muted=(78, 98, 108), ok=(21, 128, 61), warn=(180, 83, 9),
+                            bad=(185, 28, 28), accent=(255, 53, 102),
+                            accent_ink=(255, 255, 255), btn=(234, 244, 244)),
+}
+
+
+def flyout_colors():
+    cfg = load_settings()
+    mode = cfg.get("theme", "auto")
+    dark = mode != "light" if mode != "dark" else True
+    if mode == "auto":
+        dark = _system_is_dark()
+    palette = cfg.get("palette", "amber")
+    return FLYOUT_COLORS.get(("dark" if dark else "light", palette),
+                             FLYOUT_COLORS[("dark", "amber")])
+
+
+def show_flyout():
+    """左键托盘：原生小面板（不走浏览器，几十毫秒就出来）。"""
+    global _flyout_open
+    # 已经开着就收起（再点一次开关）
+    existing = user32.FindWindowW("HIDCircusFlyout", None)
+    if existing:
+        user32.PostMessageW(ctypes.c_void_p(existing), 0x0010, 0, 0)
+        return
+    if _flyout_open:
+        return
+    _flyout_open = True
+    try:
+        Flyout(collect_devices, lambda: _ui_queue.put(
+                   lambda: open_panel(PORT_HOLDER["port"])),
+               None, flyout_colors()).show()
+    except Exception:
+        log("小面板异常: " + traceback.format_exc())
+    finally:
+        _flyout_open = False
 
 
 def handle_ui_requests():
@@ -576,8 +619,7 @@ def handle_ui_requests():
         close_flyout()
         _ui_queue.put(lambda: open_panel(PORT_HOLDER["port"]))
     if UI_REQUESTS["flyout_close"] > _handled["flyout_close"]:
-        _handled["flyout_close"] = UI_REQUESTS["flyout_close"]
-        close_flyout()
+        _handled["flyout_close"] = UI_REQUESTS["flyout_close"]   # 原生面板无需外部关闭
 
 
 def close_panel():
@@ -723,8 +765,8 @@ def main():
     try:
         _icon = Tray(make_icon(None), APP_NAME,
                      [("打开主面板", on_open), ("刷新电量", on_refresh), ("退出", quit_app)],
-                     on_click=lambda: _ui_queue.put(
-                         lambda: open_flyout(PORT_HOLDER["port"])))
+                     on_click=lambda: threading.Thread(
+                         target=show_flyout, daemon=True).start())
         tray_ok = _icon.start()
         if not tray_ok:
             log(f"托盘创建失败（Shell_NotifyIcon 错误码 {getattr(_icon, 'last_error', '?')}）")
