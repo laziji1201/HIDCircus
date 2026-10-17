@@ -48,9 +48,8 @@ kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _icon = None
 _stop = threading.Event()
 _ui_queue = queue.Queue()
-_no_window_tracking = False
 _low_integrity = False
-_flyout_open = False          # 低权限下无边框窗口必然失败，直接跳过
+_flyout_open = False            # 小面板同时只开一个
 
 
 # ---------------------------------------------------------------- 环境
@@ -482,8 +481,6 @@ def open_panel(port):
                 break
             log("换下一档重试")
 
-    global _no_window_tracking
-    _no_window_tracking = True
     since = time.time()
     log("改用默认浏览器打开面板")
     try:
@@ -499,37 +496,14 @@ def open_panel(port):
     return False
 
 
-FLYOUT_SIZE = (376, 440)
-_flyout = {"hwnd": None}
-_handled = {"panel": 0.0, "flyout_close": 0.0}
-
-
-def _cursor_pos():
-    pt = w.POINT()
-    user32.GetCursorPos(ctypes.byref(pt))
-    return pt.x, pt.y
+_handled = {"panel": 0.0}
 
 
 def close_flyout():
-    for hwnd in flyout_windows():
-        user32.PostMessageW(hwnd, 0x0010, 0, 0)     # WM_CLOSE
-    _flyout["hwnd"] = None
-
-
-def _watch_flyout(hwnd):
-    """小面板一失去焦点就收起。"""
-    time.sleep(0.8)
-    while _flyout.get("hwnd") == hwnd and not _stop.is_set():
-        if not user32.IsWindow(hwnd):
-            break
-        if user32.GetForegroundWindow() != hwnd:
-            time.sleep(0.45)
-            if user32.GetForegroundWindow() != hwnd:
-                user32.PostMessageW(hwnd, 0x0010, 0, 0)
-                break
-        time.sleep(0.2)
-    if _flyout.get("hwnd") == hwnd:
-        _flyout["hwnd"] = None
+    """关掉原生小面板（如果开着）。"""
+    hwnd = user32.FindWindowW("HIDCircusFlyout", None)
+    if hwnd:
+        user32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)
 
 
 def _system_is_dark():
@@ -618,8 +592,6 @@ def handle_ui_requests():
         _handled["panel"] = UI_REQUESTS["panel"]
         close_flyout()
         _ui_queue.put(lambda: open_panel(PORT_HOLDER["port"]))
-    if UI_REQUESTS["flyout_close"] > _handled["flyout_close"]:
-        _handled["flyout_close"] = UI_REQUESTS["flyout_close"]   # 原生面板无需外部关闭
 
 
 def close_panel():
@@ -703,7 +675,9 @@ def find_running_port():
         try:
             with urllib.request.urlopen(
                     f"http://{HOST}:{port}/api/status", timeout=0.4) as resp:
-                if isinstance(json.loads(resp.read()), dict):
+                data = json.loads(resp.read())
+                # 只认自己的服务：/api/status 里一定有 port 和 log 两个字段
+                if isinstance(data, dict) and "port" in data and "log" in data:
                     return port
         except Exception:
             continue
@@ -713,7 +687,7 @@ def find_running_port():
 # ---------------------------------------------------------------- 入口
 
 def main():
-    global _icon
+    global _icon, _low_integrity
 
     def _hook(exc_type, exc, tb):
         log("未捕获异常: " + "".join(traceback.format_exception(exc_type, exc, tb)))
@@ -726,17 +700,31 @@ def main():
     sys.excepthook = _hook
     threading.excepthook = _thread_hook
 
-    # 单实例：重复双击时只开面板，不再起第二套服务
-    _mutex, first = acquire_single_instance()
-    if not first:
-        port = find_running_port()
-        if port:
-            log(f"已有实例在运行（端口 {port}），只负责把面板打开")
-            open_panel(port)
-            return
-        log("检测到实例标记但找不到服务，继续启动")
+    # 先判定自己的权限级别：低权限下托盘和浏览器窗口都不可能工作，
+    # 后面的逻辑据此少走弯路（包括"已有实例"这条早退路径）
+    level = current_integrity()
+    log(f"进程完整性: {INTEGRITY_LEVELS.get(level, hex(level) if level else '未知')}")
+    if level is not None and level < 0x2000:
+        _low_integrity = True
+        log("警告：进程权限被降级，托盘与无边框窗口都不可能工作（已弹窗提示）")
+        threading.Thread(target=warn_low_integrity, daemon=True).start()
 
     log(f"{APP_NAME} 启动")
+
+    # 单实例：重复双击时只开面板，不再起第二套服务。
+    # 两个检查都要做——不同完整性级别的进程看不到对方的互斥体（打开会失败），
+    # 但端口探测是通用的，能兜住"管理员实例 + 普通实例同时跑"的情况。
+    _mutex, first = acquire_single_instance()
+    running = find_running_port()
+    if running:
+        log(f"已有实例在运行（端口 {running}），只负责把面板打开")
+        if _low_integrity:
+            log(f"当前是低权限进程，跳过自动开窗，请手动访问 http://{HOST}:{running}")
+        else:
+            open_panel(running)
+        return
+    if not first:
+        log("检测到实例标记但找不到服务，继续启动")
     try:
         server, port = create_server()
     except OSError as e:
@@ -748,17 +736,16 @@ def main():
     STATUS["log"] = str(LOG_FILE)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     threading.Thread(target=pump, daemon=True).start()
+    try:
+        runtime = ROOT / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        (runtime / "port.txt").write_text(str(port), encoding="utf-8")
+    except OSError:
+        pass
     log(f"HTTP 面板: http://{HOST}:{port}")
     log(f"浏览器: {find_browser()[0] or '未找到'}")
     log(f"Python: {sys.executable}")
-    level = current_integrity()
-    log(f"进程完整性: {INTEGRITY_LEVELS.get(level, hex(level) if level else '未知')}")
     log(f"父进程: {parent_process()}")
-    global _low_integrity
-    if level is not None and level < 0x2000:
-        _low_integrity = True
-        log("警告：进程权限被降级，托盘与无边框窗口都不可能工作（已弹窗提示）")
-        threading.Thread(target=warn_low_integrity, daemon=True).start()
 
     # 托盘
     tray_ok = False

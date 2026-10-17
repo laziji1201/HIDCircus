@@ -21,7 +21,6 @@
     timer: null,
     firstLoad: true,
     pendingRender: false,
-    flyout: false,
   };
 
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -421,43 +420,6 @@
     });
   }
 
-  function renderFlyout(list) {
-    const box = $("#flyoutList");
-    if (!box) return;
-    if (!list.length) {
-      box.innerHTML = `<div class="flyout-item"><span class="flyout-name">${esc(t("empty.title"))}</span></div>`;
-      return;
-    }
-    box.innerHTML = list.map((d) => {
-      const hue = VENDOR_HUE[d.vendor_key] || "var(--text-3)";
-      const value = d.battery;
-      const color = value == null ? "var(--text-3)"
-        : value <= 20 ? "var(--bad)" : value <= 50 ? "var(--warn)" : "var(--ok)";
-      const state = d.note ? d.note.slice(0, 6)
-        : d.charging === true ? t("card.charging")
-        : d.connected === false ? t("card.offline") : t("card.connected");
-      return `
-        <div class="flyout-item" title="${esc(state)}">
-          <i class="vdot" style="background:${hue};box-shadow:0 0 0 3px ${hue}22"></i>
-          <span class="flyout-name">${esc(d.name)}</span>
-          <span class="flyout-pct" style="color:${color}">${value == null ? "—" : value}<em style="font-style:normal;font-size:9px;color:var(--text-3);margin-left:1px">%</em></span>
-        </div>`;
-    }).join("");
-  }
-
-  function enterFlyout() {
-    state.flyout = true;
-    state.page = "devices";
-    document.body.classList.add("is-flyout");
-    document.title = "HIDCircus 状态";
-    const view = $("#flyoutView");
-    if (view) view.hidden = false;
-    const post = (path) => fetch(path, { method: "POST" }).catch(() => {});
-    $("#flyoutClose").addEventListener("click", () => post("/api/flyout/close"));
-    $("#flyoutRefresh").addEventListener("click", () => loadDevices(true));
-    $("#flyoutOpen").addEventListener("click", () => post("/api/panel"));
-  }
-
   function renderDevices() {
     const grid = $("#deviceGrid");
     if (drag.active) {                 // 拖拽过程中别重排，等放手再刷
@@ -465,7 +427,6 @@
       return;
     }
     const list = ordered(state.devices || []);
-    if (state.flyout) { renderFlyout(list); $("#emptyState").hidden = true; return; }
     renderStat(list);
     grid.innerHTML = list.map(cardHTML).join("");
     if (state.page === "settings") renderSettingsState();
@@ -864,7 +825,6 @@
     wire();
     startHeartbeat();
     if (location.hash === "#settings") state.page = "settings";
-    if (location.hash === "#flyout" || location.pathname === "/flyout") enterFlyout();
     try {
       await loadSettings();
     } catch (err) {

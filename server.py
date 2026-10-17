@@ -48,7 +48,7 @@ DEFAULT_SETTINGS = {
     "bg_blur": 0,           # 背景模糊半径 0–24 px
     "refresh_seconds": 10,  # 自动刷新间隔
     "device_order": [],     # 用户拖拽出来的设备顺序（设备 id 列表）
-    "palette": "amber",     # 配色预设 amber / silver / sakura / neon
+    "palette": "silver",    # 配色预设 silver / amber / sakura / neon
     "motion": "auto",       # auto=跟随系统（关掉动画时少做位移） / on=始终开启动效
 }
 
@@ -56,7 +56,7 @@ DEFAULT_SETTINGS = {
 STATUS = {"tray": None, "port": None, "log": "", "last_ping": 0.0}
 
 # 页面发过来、由桌面壳（app.py）执行的请求：0 表示没有
-UI_REQUESTS = {"panel": 0.0, "flyout_close": 0.0}
+UI_REQUESTS = {"panel": 0.0}
 
 _scan_lock = threading.Lock()
 _cache = {"at": 0.0, "devices": []}
@@ -224,7 +224,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         s = load_settings()
         prefs = {"theme": s.get("theme", "auto"),
-                 "palette": s.get("palette", "amber"),
+                 "palette": s.get("palette", "silver"),
                  "language": s.get("language", "zh")}
         html = html.replace("__PREFS_JSON__", json.dumps(prefs))
         self._send(html.encode("utf-8"), "text/html; charset=utf-8")
@@ -250,9 +250,7 @@ class Handler(BaseHTTPRequestHandler):
         route = urlparse(self.path).path
         _debug_log(f"GET {self.path} ua={self.headers.get('User-Agent', '-')[:40]}")
 
-        # /flyout 和 / 用同一个页面，只是给托盘小面板一个独立 URL：
-        # Edge 的 --app 会把相同 URL 的窗口复用，用哈希区分会导致"小窗口里开主面板"
-        if route in ("/", "/index.html", "/flyout"):
+        if route in ("/", "/index.html"):
             self._serve_index()
             return
         if route == "/api/devices":
@@ -323,10 +321,6 @@ class Handler(BaseHTTPRequestHandler):
 
         if route == "/api/panel":
             UI_REQUESTS["panel"] = time.time()
-            self._json({"ok": True})
-            return
-        if route == "/api/flyout/close":
-            UI_REQUESTS["flyout_close"] = time.time()
             self._json({"ok": True})
             return
         if route == "/api/ping":
