@@ -1131,6 +1131,14 @@
   /* ---------------- 启动 ---------------- */
 
   async function boot() {
+    try {
+      await bootInner();
+    } catch (err) {
+      failSafe(err);
+    }
+  }
+
+  async function bootInner() {
     if (localStorage.getItem("railCollapsed") === "1") {
       document.body.classList.add("rail-collapsed");
     }
@@ -1148,10 +1156,36 @@
     applyMotion();
     applyLang();
     applyBackground();
-    renderSettingsState();
-    await loadDevices();
+    try {
+      renderSettingsState();
+    } catch (err) {
+      console.error("renderSettingsState", err);
+    }
+    try {
+      await loadDevices();
+    } catch (err) {
+      failSafe(err);
+    } finally {
+      hideLoader();          // 无论如何收掉加载页
+    }
     startTimer();
   }
+
+  /* 兜底：只要脚本抛错，也要把加载遮罩收掉并显示错误条，
+     否则用户看到的就是一整块"黢黑"的窗口（曾经发生过）。 */
+  function failSafe(err) {
+    try {
+      hideLoader();
+      const box = document.getElementById("fatalBox");
+      if (box) {
+        box.hidden = false;
+        box.textContent = `${t("toast.failed")}: ${(err && err.message) || err}`;
+      }
+    } catch (_) { /* 兜底里再出错就放弃 */ }
+  }
+
+  window.addEventListener("error", (e) => failSafe(e.error || e.message));
+  window.addEventListener("unhandledrejection", (e) => failSafe(e.reason));
 
   document.addEventListener("DOMContentLoaded", boot);
 })();
