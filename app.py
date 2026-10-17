@@ -123,12 +123,14 @@ def warn_low_integrity():
     """
     user32.MessageBoxW.restype = ctypes.c_int
     user32.MessageBoxW.argtypes = [w.HWND, w.LPCWSTR, w.LPCWSTR, w.UINT]
+    if getattr(sys, "frozen", False):
+        howto = f"双击 {Path(sys.executable).name}（或它的桌面快捷方式）"
+    else:
+        howto = f"双击项目里的 {ROOT / 'run.bat'}"
     text = (
         "HIDCircus 当前以「低权限」运行，托盘图标和面板窗口都无法工作。\n\n"
-        "这通常是因为它是从受限入口启动的（例如某个工具的沙箱文件管理器、"
-        "被降权的终端）。请改用下面任一方式启动：\n"
-        "  · Win+R，输入：\n     " + str(ROOT / "run.bat") + "\n"
-        "  · 或者在自己的资源管理器里进入该文件夹，双击 run.bat\n\n"
+        "这通常是从受限入口（某个工具的沙箱文件管理器、被降权的终端）启动导致的。\n"
+        f"请改为：{howto}\n\n"
         "点「确定」立即用管理员权限重启一次（会弹 UAC）。点「取消」继续以低权限运行。"
     )
     result = user32.MessageBoxW(None, text, "HIDCircus 权限不足",
@@ -633,6 +635,39 @@ def close_flyout():
         user32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)
 
 
+def _relaunch_elevated():
+    """用管理员权限重启自己（一次 UAC）。成功返回 True。"""
+    try:
+        shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+        shell32.ShellExecuteW.restype = ctypes.c_void_p
+        shell32.ShellExecuteW.argtypes = [w.HWND, w.LPCWSTR, w.LPCWSTR,
+                                          w.LPCWSTR, w.LPCWSTR, ctypes.c_int]
+        if getattr(sys, "frozen", False):
+            exe = sys.executable
+            params = "--elevated"
+        else:
+            exe = sys.executable
+            params = f'"{ROOT / "app.py"}" --elevated'
+        # ShellExecuteW("runas") 会一直等 UAC 响应；某些环境（无人值守/策略禁用）
+        # 下可能永远不返回，所以放到线程里并加超时，超时就当提权失败继续跑。
+        outcome = {"ok": False}
+
+        def _call():
+            try:
+                res = shell32.ShellExecuteW(None, "runas", exe, params, str(ROOT), 1)
+                outcome["ok"] = int(res or 0) > 32
+            except Exception:
+                outcome["ok"] = False
+
+        worker = threading.Thread(target=_call, daemon=True)
+        worker.start()
+        worker.join(15)
+        return outcome["ok"]
+    except Exception:
+        log("提权重启异常: " + traceback.format_exc())
+        return False
+
+
 def _system_is_dark():
     """系统主题是深色还是浅色（主题设为 auto 时用）。"""
     try:
@@ -717,6 +752,8 @@ def show_flyout(mode="panel"):
     if _flyout_open:
         return
     _flyout_open = True
+    global _panel_used
+    _panel_used = True
     try:
         Flyout(collect_devices,
                lambda: _ui_queue.put(lambda: open_panel(PORT_HOLDER["port"])),
@@ -781,10 +818,19 @@ def pump():
             log("托盘动作异常: " + traceback.format_exc())
 
 
+_panel_used = False          # 原生面板是否被用过（用过就不该因为"没心跳"退出）
+
+
 def idle_watchdog():
-    """没有托盘时，用页面心跳判断面板是否还开着。"""
+    """没有托盘时，用页面心跳判断面板是否还开着。
+
+    注意：原生面板不产生心跳，所以只要用户点开过面板，就不再按心跳收进程。
+    """
     started = time.time()
     while not _stop.is_set():
+        if _panel_used:
+            _stop.wait(5)
+            continue
         last = STATUS.get("last_ping") or 0
         if last:
             if time.time() - last > 90:
@@ -847,8 +893,13 @@ def main():
     log(f"进程完整性: {INTEGRITY_LEVELS.get(level, hex(level) if level else '未知')}")
     if level is not None and level < 0x2000:
         _low_integrity = True
-        # 不再"提示一次就装死"：照样尝试开面板，失败后由 open_panel 兜底提示
-        log("注意：进程权限被降级，托盘图标不可用；面板会尝试用浏览器打开")
+        # 低权限下托盘/窗口都不可能工作。与其弹对话框，不如自动提权一次（UAC），
+        # 带上 --elevated 标记防止无限递归。
+        log("检测到低权限，尝试提权重启（会弹一次 UAC）")
+        if "--elevated" not in sys.argv and _relaunch_elevated():
+            log("已交给提权实例，当前进程退出")
+            return
+        log("提权被取消或失败，继续以低权限运行（托盘/窗口不可用）")
 
     log(f"{APP_NAME} 启动")
 

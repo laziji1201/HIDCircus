@@ -119,10 +119,10 @@ class Flyout:
     FOOT_H = 46
 
     # panel 模式用的大尺寸
-    PANEL_WIDTH = 460
-    PANEL_ROW_H = 62
-    PANEL_HEAD_H = 64
-    PANEL_FOOT_H = 52
+    PANEL_WIDTH = 392
+    PANEL_ROW_H = 52
+    PANEL_HEAD_H = 54
+    PANEL_FOOT_H = 44
 
     def __init__(self, devices_fn, on_open_panel, on_refresh, colors,
                  mode="flyout", on_control=None):
@@ -357,7 +357,7 @@ class Flyout:
             gdi32.SetBkMode(hdc, TRANSPARENT)
 
             # 标题
-            font_title = gdi32.CreateFontW(int(-14 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
+            font_title = gdi32.CreateFontW(int(-13 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
                                            0, 0, 0, 0, 0, "Microsoft YaHei UI")
             gdi32.SelectObject(hdc, font_title)
             gdi32.SetTextColor(hdc, _rgb(*c["text"]))
@@ -463,30 +463,30 @@ class Flyout:
             gdi32.RoundRect(hdc, 0, 0, width, height, int(14 * scale), int(14 * scale))
             gdi32.SetBkMode(hdc, TRANSPARENT)
 
-            font_title = gdi32.CreateFontW(int(-17 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
+            font_title = gdi32.CreateFontW(int(-15 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
                                            0, 0, 0, 0, 0, "Microsoft YaHei UI")
             font_sub = gdi32.CreateFontW(int(-11 * scale), 0, 0, 0, 400, 0, 0, 0,
                                          0, 0, 0, 0, 0, "Microsoft YaHei UI")
-            font_name = gdi32.CreateFontW(int(-14 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
+            font_name = gdi32.CreateFontW(int(-13 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
                                           0, 0, 0, 0, 0, "Microsoft YaHei UI")
             font_small = gdi32.CreateFontW(int(-11 * scale), 0, 0, 0, 400, 0, 0, 0,
                                            0, 0, 0, 0, 0, "Microsoft YaHei UI")
-            font_pct = gdi32.CreateFontW(int(-20 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
+            font_pct = gdi32.CreateFontW(int(-17 * scale), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0,
                                          0, 0, 0, 0, 0, "Segoe UI")
 
             gdi32.SelectObject(hdc, font_title)
             gdi32.SetTextColor(hdc, _rgb(*c["text"]))
-            self._text(hdc, "HIDCircus", int(18 * scale), int(12 * scale),
-                       width - int(120 * scale), int(24 * scale), DT_LEFT)
+            self._text(hdc, "HIDCircus", int(16 * scale), int(9 * scale),
+                       width - int(110 * scale), int(22 * scale), DT_LEFT)
 
             gdi32.SelectObject(hdc, font_sub)
             gdi32.SetTextColor(hdc, _rgb(*c["muted"]))
-            self._text(hdc, "外设控制台", int(18 * scale), int(38 * scale),
+            self._text(hdc, "外设控制台", int(16 * scale), int(30 * scale),
                        width - int(120 * scale), int(16 * scale), DT_LEFT)
 
             # 右上角：刷新按钮
-            refresh = (width - int(80 * scale), int(14 * scale),
-                       width - int(16 * scale), int(42 * scale))
+            refresh = (width - int(72 * scale), int(10 * scale),
+                       width - int(14 * scale), int(34 * scale))
             self._rows = [(*refresh, "refresh")]
 
             y = int(self.PANEL_HEAD_H * scale)
@@ -514,7 +514,7 @@ class Flyout:
                 kind = {"mouse": "鼠标", "keyboard": "键盘", "headset": "耳机"}.get(
                     d.get("kind"), "设备")
                 state = "充电中" if d.get("charging") else ("已连接" if d.get("connected", True) else "离线")
-                self._text(hdc, f"{kind} · {state}", int(32 * scale), y + int(24 * scale),
+                self._text(hdc, f"{kind} · {state}", int(32 * scale), y + int(21 * scale),
                            width - int(140 * scale), int(16 * scale), DT_LEFT)
 
                 battery = d.get("battery")
@@ -527,9 +527,9 @@ class Flyout:
                 gdi32.SelectObject(hdc, font_pct)
                 gdi32.SetTextColor(hdc, _rgb(*color))
                 self._text(hdc, label, width - int(92 * scale), y,
-                           int(74 * scale), int(40 * scale), DT_RIGHT)
+                           int(66 * scale), int(36 * scale), DT_RIGHT)
 
-                ctrl_y = y + int(44 * scale)
+                ctrl_y = y + int(38 * scale)
                 if extra.get("lighting"):
                     on = extra.get("lighting_on")
                     for idx, (label, action) in enumerate((("开", "lighting_on"),
@@ -556,7 +556,7 @@ class Flyout:
                                ctrl_y, int(60 * scale), int(22 * scale),
                                DT_LEFT | DT_VCENTER)
 
-                y += row_h + (int(30 * scale) if (extra.get("lighting")) else 0)
+                y += row_h + (int(26 * scale) if (extra.get("lighting")) else 0)
 
             # 底部：打开网页版 / 关闭
             ly = height - int(self.PANEL_FOOT_H * scale)
