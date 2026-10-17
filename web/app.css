@@ -748,8 +748,19 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 50%; }
 .toast.is-bad .ico { color: var(--bad); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
 
+/* 有些机器默认关掉了系统动画（prefers-reduced-motion: reduce）。
+   这里只收敛"位移/缩放"类动效，颜色与透明度过渡保留——否则整个界面会
+   变成硬切，看起来又廉价又卡。 */
 @media (prefers-reduced-motion: reduce) {
-  * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  html:not([data-motion="on"]) .card:hover,
+  html:not([data-motion="on"]) .card.is-armed,
+  html:not([data-motion="on"]) .card.is-dragging,
+  html:not([data-motion="on"]) .btn:active,
+  html:not([data-motion="on"]) .palette-item:hover,
+  html:not([data-motion="on"]) .palette-item:active { transform: none !important; }
+  html:not([data-motion="on"]) .card { animation: none !important; }
+  html:not([data-motion="on"]) .mark,
+  html:not([data-motion="on"]) .loader-mark { animation: none !important; }
 }
 
 @media (max-width: 780px) {
@@ -940,22 +951,26 @@ body.is-dragging { user-select: none; cursor: grabbing; }
 .ring-num {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: baseline;
-  justify-content: center;
-  padding-top: 21px;
+  display: grid;
+  place-items: center;
+  line-height: 1;
   font-size: 17px;
   font-weight: 620;
   letter-spacing: -.7px;
   font-variant-numeric: tabular-nums;
   color: var(--text);
 }
+.ring-num .n {
+  display: flex;
+  align-items: baseline;
+  gap: 1px;
+  transform: translateY(1px);
+}
 .ring-num em {
   font-style: normal;
   font-size: 9.5px;
   font-weight: 500;
   color: var(--text-3);
-  margin-left: 1px;
   letter-spacing: 0;
 }
 .battery-meta { display: flex; flex-direction: column; gap: 5px; min-width: 0; }

@@ -77,7 +77,7 @@
 <div class="loader" id="loader">
   <div class="loader-inner">
     <div class="loader-mark">H</div>
-    <div class="loader-text" id="loaderText">正在读取设备…</div>
+    <div class="loader-text" id="loaderText" data-i18n="loader.text">正在读取设备…</div>
     <div class="loader-bar"><i></i></div>
   </div>
 </div>
@@ -170,6 +170,17 @@
               <em data-i18n="settings.palette.sub">换一套主色，界面结构不变</em>
             </div>
             <div class="palettes" id="paletteSeg"></div>
+          </div>
+
+          <div class="field">
+            <div class="field-label">
+              <span data-i18n="settings.motion">动效</span>
+              <em data-i18n="settings.motion.sub">系统关掉动画时，这里可以强制开启过渡</em>
+            </div>
+            <div class="segmented" id="motionSeg">
+              <button data-value="auto" data-i18n="motion.auto">跟随系统</button>
+              <button data-value="on" data-i18n="motion.on">始终开启</button>
+            </div>
           </div>
 
           <div class="field">

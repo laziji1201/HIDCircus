@@ -166,6 +166,11 @@
     if (state.devices) renderDevices();
   }
 
+  function applyMotion() {
+    const mode = (state.settings && state.settings.motion) || "auto";
+    document.documentElement.dataset.motion = mode === "on" ? "on" : "auto";
+  }
+
   function applyPalette() {
     const id = (state.settings && state.settings.palette) || "amber";
     document.documentElement.dataset.palette = PALETTES.some((p) => p.id === id) ? id : "amber";
@@ -210,12 +215,18 @@
     renderPageHead();
   }
 
+  const BOOT_AT = performance.now();
+
   function hideLoader() {
-    const el = $("#loader");
-    document.body.classList.remove("is-booting");
-    if (!el) return;
-    el.classList.add("is-hidden");
-    setTimeout(() => el.remove(), 620);
+    // 数据到得太快的话加载页会一闪而过，反而显得闪屏；至少留 650ms
+    const wait = Math.max(0, 650 - (performance.now() - BOOT_AT));
+    setTimeout(() => {
+      const el = $("#loader");
+      document.body.classList.remove("is-booting");
+      if (!el) return;
+      el.classList.add("is-hidden");
+      setTimeout(() => el.remove(), 620);
+    }, wait);
   }
 
   function setSync(kind) {
@@ -346,7 +357,7 @@
           <circle class="ring-fill" cx="22" cy="22" r="${r}"
                   stroke-dasharray="${dash.toFixed(1)} ${circ.toFixed(1)}"/>
         </svg>
-        <span class="ring-num">${value == null ? "—" : value}<em>%</em></span>
+        <span class="ring-num"><span class="n">${value == null ? "—" : value}<em>%</em></span></span>
       </div>`;
   }
 
@@ -375,7 +386,7 @@
 
     // 环形进度只占一小块，腾出来的垂直空间给下面的设置项
     const facts = [];
-    if (extra.dpi) facts.push(`DPI ${Number(extra.dpi.x) || "—"} × ${Number(extra.dpi.y) || "—"}`);
+    if (extra.dpi) facts.push(`DPI  X ${Number(extra.dpi.x) || "—"} · Y ${Number(extra.dpi.y) || "—"}`);
     if (extra.poll_rate) facts.push(`${extra.poll_rate} Hz`);
 
     return `
@@ -447,6 +458,7 @@
     mark("#themeSeg", s.theme || "auto");
     mark("#langSeg", s.language || "zh");
     mark("#refreshSeg", String(s.refresh_seconds ?? 10));
+    mark("#motionSeg", s.motion || "auto");
     renderPalettes(s.palette || "amber");
 
     const dim = Math.round((s.bg_dim ?? 0.55) * 100);
@@ -648,6 +660,14 @@
       startTimer();
     });
 
+    $("#motionSeg").addEventListener("click", async (e) => {
+      const btn = e.target.closest("button");
+      if (!btn) return;
+      await saveSettings({ motion: btn.dataset.value });
+      applyMotion();
+      renderSettingsState();
+    });
+
     $("#bgPick").addEventListener("click", () => $("#bgFile").click());
     $("#bgFile").addEventListener("change", async (e) => {
       const file = e.target.files && e.target.files[0];
@@ -792,6 +812,7 @@
     }
     applyTheme();
     applyPalette();
+    applyMotion();
     applyLang();
     applyBackground();
     renderSettingsState();

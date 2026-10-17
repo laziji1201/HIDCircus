@@ -5,12 +5,14 @@
 不用内嵌 WebView（pywebview 在 .NET Framework 下加载失败，coreclr 又缺 WinForms）。
 
 结构：
-  本地 HTTP 服务（线程） + Edge 应用窗口（子进程） + 托盘（pystray）
+  本地 HTTP 服务（线程） + Edge 应用窗口（子进程） + 托盘（原生 Shell_NotifyIcon）
   关闭窗口不会退出程序，托盘还在；托盘退出才真正结束。
   托盘不可用时退化为「窗口关了就把进程也收掉」，避免留后台孤儿进程。
 """
 
 import ctypes
+import json
+import urllib.request
 import os
 import queue
 import shutil
@@ -20,15 +22,17 @@ import threading
 import time
 import traceback
 from ctypes import wintypes as w
+
+user32 = ctypes.WinDLL("user32", use_last_error=True)
 from pathlib import Path
 
-import pystray
+from tray import Tray
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from server import create_server, collect_devices, load_settings, STATUS, HOST
+from server import create_server, collect_devices, load_settings, STATUS, HOST, PORT, PORT_TRIES
 
 APP_NAME = "HIDCircus"
 TRAY_POLL = 30
@@ -37,6 +41,7 @@ FONT_PATH = r"C:\Windows\Fonts\arialbd.ttf"
 _root_icon = None
 _stop = threading.Event()
 _ui_queue = queue.Queue()
+_no_window_tracking = False     # 退到默认浏览器时，没有可跟踪的窗口
 
 
 # ---------- 日志 ----------
@@ -123,27 +128,66 @@ def find_edge():
     return None
 
 
-def windows_with_title(needle):
-    """返回标题包含 needle 的可见顶层窗口句柄列表。"""
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    handles = []
+def _process_name(hwnd):
+    """窗口属于哪个进程（只要 exe 名）。"""
+    pid = w.DWORD(0)
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if not pid.value:
+        return ""
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        ctypes.c_void_p, w.DWORD, w.LPWSTR, ctypes.POINTER(w.DWORD)]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not h:
+        return ""
+    try:
+        buf = ctypes.create_unicode_buffer(512)
+        size = w.DWORD(512)
+        if not kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+            return ""
+        return Path(buf.value).name.lower()
+    finally:
+        kernel32.CloseHandle(h)
+
+
+def _enum_windows():
+    found = []
 
     @ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
     def _cb(hwnd, lparam):
-        if not user32.IsWindowVisible(hwnd):
-            return True
-        length = user32.GetWindowTextLengthW(hwnd)
-        if length <= 0:
-            return True
-        buf = ctypes.create_unicode_buffer(length + 1)
-        user32.GetWindowTextW(hwnd, buf, length + 1)
-        if needle.lower() in buf.value.lower():
-            handles.append(hwnd)
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                found.append((hwnd, buf.value))
         return True
 
     user32.EnumWindows(_cb, 0)
-    return handles
+    return found
 
+
+def panel_windows():
+    """只认"我们自己的面板窗口"。
+
+    不能只按标题模糊匹配：资源管理器窗口的标题是「HIDCircus - 文件资源管理器」，
+    也包含 HIDCircus，之前就会把那个文件夹窗口当成面板，导致点托盘/启动都只是
+    去聚焦一个文件夹，浏览器根本不启动。所以还要限定是 Edge 进程 + 标题以应用名开头。
+    """
+    out = []
+    for hwnd, title in _enum_windows():
+        if not title.startswith(APP_NAME):
+            continue
+        if " - " in title:          # 「HIDCircus - 文件资源管理器」这类不算
+            continue
+        if _process_name(hwnd) != "msedge.exe":
+            continue
+        out.append(hwnd)
+    return out
 
 def kill_stale_browsers(profile: Path):
     """杀掉上次残留、还在用我们这个配置目录的 Edge 实例。
@@ -188,7 +232,7 @@ def clean_profile_state(profile: Path):
             pass
 
 
-def _spawn_window(edge, url, profile: Path, wipe=False):
+def _spawn_window(edge, url, profile: Path, wipe=False, extra=()):
     """起一次窗口，并等它真的把页面标题加载出来。"""
     if wipe:
         shutil.rmtree(profile, ignore_errors=True)
@@ -208,6 +252,7 @@ def _spawn_window(edge, url, profile: Path, wipe=False):
         "--disable-features=Translate,MediaRouter",
         "--window-size=1180,820",
         "--window-position=140,90",
+        *extra,
     ]
     try:
         subprocess.Popen(args, close_fds=True,
@@ -219,9 +264,16 @@ def _spawn_window(edge, url, profile: Path, wipe=False):
     # 加载失败时 Edge 的窗口标题就是地址本身，所以只有标题变成 HIDCircus 才算成功
     deadline = time.time() + 12
     while time.time() < deadline and not _stop.is_set():
-        if windows_with_title(APP_NAME):
+        if panel_windows():
             return True
         time.sleep(0.6)
+
+    # 失败时把当时能看到的 Edge 窗口标题记下来：能区分"窗口没出现"和"出现但页面挂了"
+    seen = []
+    for hwnd, title in _enum_windows():
+        if _process_name(hwnd) == "msedge.exe" and ("HIDCircus" in title or title.startswith("127.0.0.1")):
+            seen.append(title)
+    log(f"面板窗口未就绪，当前 Edge 窗口: {seen or '无'}")
     return False
 
 
@@ -231,9 +283,8 @@ def open_panel(port):
     先用现有配置目录；起不来就说明这份 Edge 配置坏了（上一次被强杀过），
     清空重开一次——配置目录是我们自己生成的，删掉没有副作用。
     """
-    existing = windows_with_title(APP_NAME)
+    existing = panel_windows()
     if existing:
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
         for hwnd in existing:
             user32.ShowWindow(hwnd, 9)          # SW_RESTORE
             user32.SetForegroundWindow(hwnd)
@@ -248,23 +299,33 @@ def open_panel(port):
         return False
 
     profile = ROOT / ".runtime" / "edge-profile"
-    if _spawn_window(edge, url, profile):
-        log(f"已打开窗口: {url}")
-        return True
 
-    log("窗口未加载出来，清空配置副本重试一次")
-    if _spawn_window(edge, url, profile, wipe=True):
-        log(f"已打开窗口: {url}")
-        return True
+    # 逐级降级：正常配置 → 清配置 → 关 GPU → 退到默认浏览器
+    attempts = [
+        ("使用现有配置", {"wipe": False, "extra": ()}),
+        ("清空配置副本重试", {"wipe": True, "extra": ()}),
+        ("关闭 GPU 重试", {"wipe": True, "extra": ("--disable-gpu",)}),
+    ]
+    for label, kwargs in attempts:
+        log(f"打开面板窗口：{label}")
+        if _spawn_window(edge, url, profile, **kwargs):
+            log(f"已打开窗口: {url}")
+            return True
 
-    log("窗口仍然打不开，服务继续在跑，可以手动运行 panel.bat")
+    global _no_window_tracking
+    _no_window_tracking = True
+    log("无边框窗口在本次环境用不了，改用默认浏览器打开面板")
+    try:
+        import webbrowser
+        webbrowser.open(url)
+    except Exception:
+        log("默认浏览器也打不开: " + traceback.format_exc())
     return False
 
 
 def close_panel():
     """退出时顺手关掉我们开的窗口，别留一个连不上后端的空壳。"""
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    for hwnd in windows_with_title(APP_NAME):
+    for hwnd in panel_windows():
         try:
             user32.PostMessageW(hwnd, 0x0010, 0, 0)   # WM_CLOSE
         except Exception:
@@ -277,14 +338,17 @@ def window_watchdog(port):
     Edge 冷启动到页面加载完可能要好几秒，标题也不是一开始就叫 HIDCircus，
     所以要给足启动宽限，并且连续几次都找不到才算真的关了。
     """
+    if _no_window_tracking:
+        return          # 面板开在默认浏览器里，窗口标题不可控，别因此退出
+
     deadline = time.time() + 90
     while time.time() < deadline and not _stop.is_set():
-        if windows_with_title(APP_NAME):
+        if panel_windows():
             break
         _stop.wait(2)
     misses = 0
     while not _stop.is_set():
-        if windows_with_title(APP_NAME):
+        if panel_windows():
             misses = 0
         else:
             misses += 1
@@ -321,7 +385,7 @@ PORT_HOLDER = {"port": 8777}
 
 
 def pump():
-    """主循环线程里执行队列里的动作（pystray 回调在它自己的线程）。"""
+    """主循环线程里执行队列里的动作（托盘回调在它自己的线程）。"""
     while not _stop.is_set():
         try:
             _ui_queue.get(timeout=0.2)()
@@ -332,6 +396,31 @@ def pump():
 
 
 # ---------- 入口 ----------
+
+def acquire_single_instance():
+    """单实例：重复双击 run.bat 不要再起一套服务。"""
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, w.BOOL, w.LPCWSTR]
+    ctypes.set_last_error(0)
+    handle = kernel32.CreateMutexW(None, True, "Local\\HIDCircus.SingleInstance")
+    already = ctypes.get_last_error() == 183        # ERROR_ALREADY_EXISTS
+    return handle, not already
+
+
+def find_running_port():
+    """找到已经在跑的那个实例的端口。"""
+    for port in range(PORT, PORT + PORT_TRIES):
+        try:
+            with urllib.request.urlopen(
+                    f"http://{HOST}:{port}/api/status", timeout=0.4) as resp:
+                data = json.loads(resp.read())
+            if isinstance(data, dict):
+                return port
+        except Exception:
+            continue
+    return None
+
 
 def main():
     global _root_icon
@@ -346,6 +435,16 @@ def main():
 
     sys.excepthook = _hook
     threading.excepthook = _thread_hook
+
+    _mutex, first = acquire_single_instance()
+    if not first:
+        port = find_running_port()
+        if port:
+            log(f"已有实例在运行（端口 {port}），只负责把面板打开")
+            open_panel(port)
+            return
+        log("检测到实例标记但找不到服务，继续启动")
+
     log(f"{APP_NAME} 启动")
 
     try:
@@ -358,32 +457,30 @@ def main():
     STATUS["log"] = str(LOG_FILE)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log(f"HTTP 面板: http://{HOST}:{port}")
+    log(f"Edge 路径: {find_edge() or '未找到'}")
+    log(f"Python: {sys.executable}")
     print(f"HTTP 面板: http://{HOST}:{port}")
 
     threading.Thread(target=pump, daemon=True).start()
 
-    # 托盘
+    # 托盘（原生 Shell_NotifyIcon）
     tray_ok = False
     try:
-        _root_icon = pystray.Icon(
-            "hidcircus", make_icon(None), APP_NAME,
-            menu=pystray.Menu(
-                pystray.MenuItem("打开面板", on_open, default=True),
-                pystray.MenuItem("刷新电量", on_refresh),
-                pystray.MenuItem("退出", quit_app),
-            ),
+        _root_icon = Tray(
+            make_icon(None), APP_NAME,
+            [("打开面板", on_open), ("刷新电量", on_refresh), ("退出", quit_app)],
+            on_click=on_open,
         )
-        _root_icon.run_detached()
-        time.sleep(1.2)
-        tray_ok = bool(getattr(_root_icon, "_hwnd", None))
-        STATUS["tray"] = tray_ok
-        log("托盘已就绪" if tray_ok else "托盘未建立（_hwnd 为空）")
+        tray_ok = _root_icon.start()
+        if not tray_ok:
+            log(f"托盘创建失败（Shell_NotifyIcon 错误码 {getattr(_root_icon, 'last_error', '?')}）")
+            _root_icon = None
     except Exception:
         log("托盘不可用: " + traceback.format_exc())
         _root_icon = None
         tray_ok = False
-        STATUS["tray"] = False
-
+    STATUS["tray"] = tray_ok
+    log("托盘已就绪" if tray_ok else "托盘不可用，退化为只显示窗口")
     threading.Thread(target=open_panel, args=(port,), daemon=True).start()
 
     if tray_ok:

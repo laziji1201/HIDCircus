@@ -217,6 +217,21 @@ buf[89]     校验
 25. `SetupDiGetDeviceRegistryProperty` 要传 `SP_DEVINFO_DATA`，不能传设备接口的句柄，
     否则名字永远是空字符串
 26. `ctypes.wintypes` 没有 `UCHAR`，用 `ctypes.c_ubyte`
+27. **别用"标题包含应用名"来找自己的窗口**：资源管理器窗口标题是「HIDCircus - 文件资源管理器」，
+    同样包含 HIDCircus。之前 `open_panel()` 每次都命中那个文件夹窗口、以为面板已经开着，
+    结果浏览器根本不启动（用户反馈"run.bat 打开不了面板"）。现在要求：标题**以**应用名开头
+    且进程是 `msedge.exe`，并且排除带 " - " 的标题。`close_panel()` 同样只认这种窗口，
+    否则退出时会去关用户的资源管理器
+28. **pystray 在这台机器上不可用**（对消息窗口调 `ChangeWindowMessageFilterEx` 返回拒绝访问）。
+    已改成自己写的 `tray.py`（`Shell_NotifyIcon`），并且不再依赖 pystray（requirements 里已删）
+29. **重复双击会产生多套服务**（端口一路顺延到 8778/8779…）。已加命名互斥体做单实例：
+    第二个实例只负责把已有实例的面板打开，然后退出
+30. **系统动画被关掉时会触发 `prefers-reduced-motion: reduce`**，原来的 `* { transition-duration: .01ms }`
+    会把全站过渡都砍掉，界面变成硬切（用户反馈"没有过渡、很廉价"）。现在只收敛位移类动效，
+    颜色/透明度过渡保留，并在设置里给了「动效：跟随系统 / 始终开启」开关
+31. 无边框窗口在异常环境里可能起不来（渲染进程崩溃，窗口标题会变成 `127.0.0.1`）。
+    `open_panel()` 现在按「现有配置 → 清空配置 → 关 GPU → 默认浏览器」四级降级，
+    并在日志里记录每一步看到的现象
 27. 前端自己踩的：同一作用域里重复 `const $ = ...` 会让**整个脚本不执行**（页面白屏）。
     现在 `app.js` 顶部挂了全局 error / unhandledrejection，出错会在页面底部显示错误条
 

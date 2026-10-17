@@ -47,6 +47,7 @@ DEFAULT_SETTINGS = {
     "refresh_seconds": 10,  # 自动刷新间隔
     "device_order": [],     # 用户拖拽出来的设备顺序（设备 id 列表）
     "palette": "amber",     # 配色预设 amber / silver / sakura / neon
+    "motion": "auto",       # auto=跟随系统（关掉动画时少做位移） / on=始终开启动效
 }
 
 # 运行状态（app.py 启动后回填，供页面显示托盘是否可用）
