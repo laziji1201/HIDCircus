@@ -472,6 +472,7 @@
     mark("#motionSeg", s.motion || "auto");
     renderPalettes(s.palette || "silver");
     renderExtensions();
+    renderExtHelp();
 
     const dim = Math.round((s.bg_dim ?? 0.55) * 100);
     const blur = Math.round(s.bg_blur ?? 0);
@@ -497,6 +498,58 @@
       const logEl = $("#aboutLog");
       if (logEl && st && st.log) logEl.textContent = st.log.replace(/^.*[\\/]/, "logs/");
     }).catch(() => {});
+  }
+
+  const EXT_TEMPLATE = {
+    spec: 1,
+    id: "vendor-model",
+    name: "厂商 型号（电量）",
+    author: "你的名字",
+    match: { vid: "0x046D", pid: ["0xC548"], usage_page: "0xFF00" },
+    device: { name: "型号", kind: "mouse", vendor_label: "厂商" },
+    read: {
+      battery: {
+        transport: "feature",
+        report_id: "0x51",
+        request: "0x28 0x00",
+        read_size: 64,
+        reply_check: { offset: 1, equals: "0x51" },
+        value: { offset: 6, size: 1, scale: 1, min: 0, max: 100 },
+      },
+      charging: {
+        transport: "feature",
+        report_id: "0x51",
+        request: "0x28 0x01",
+        value: { offset: 5, equals: "1" },
+      },
+    },
+  };
+
+  function renderExtHelp() {
+    const pre = $("#extTemplate");
+    if (!pre || pre.dataset.filled === "1") return;
+    pre.textContent = JSON.stringify(EXT_TEMPLATE, null, 2);
+    pre.dataset.filled = "1";
+
+    const copy = $("#extCopy");
+    if (copy) {
+      copy.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(pre.textContent);
+          toast(t("ext.copied"), "ok");
+        } catch (_) {
+          toast(t("toast.failed"), "bad");
+        }
+      });
+    }
+    const openDir = $("#extOpenDir");
+    if (openDir) {
+      openDir.addEventListener("click", async () => {
+        const out = await api("/api/extensions/open-dir", { method: "POST" })
+          .catch(() => ({ ok: false }));
+        if (!out.ok) toast(`${t("toast.failed")}: ${out.error || "?"}`, "bad");
+      });
+    }
   }
 
   async function renderExtensions() {

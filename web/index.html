@@ -245,6 +245,25 @@
             <p data-i18n="settings.ext.sub">自己写的适配文件放在 extensions/ 里，加载后无需重启</p>
           </div>
           <div class="ext-list" id="extList"></div>
+          <details class="ext-help">
+            <summary data-i18n="ext.help">格式速查（自己写 / 让 AI 写都能照着来）</summary>
+            <div class="ext-help-body">
+              <p data-i18n="ext.help.intro">把 JSON 放进扩展目录即可生效，不需要重启：
+                文件里声明「怎么认出这台设备」和「发什么报文、读第几字节」。</p>
+              <pre id="extTemplate" class="ext-template"></pre>
+              <ul class="ext-help-list">
+                <li data-i18n="ext.help.match">match：vid 必填，pid 可数组；建议带上 usage_page（同一设备常有多个接口）</li>
+                <li data-i18n="ext.help.transport">transport：feature（发 feature report）/ output（原始 write）/ razer（91 字节 + 自动校验）</li>
+                <li data-i18n="ext.help.value">value：offset 从第几字节取、size 几个字节、scale 乘多少（0-255 换百分比写 0.392）</li>
+                <li data-i18n="ext.help.check">reply_check：先确认这条响应是你发的命令的回包，否则容易读到旧值</li>
+                <li data-i18n="ext.help.debug">读不到时看 logs/app.log，或用 HIDCIRCUS_DEBUG=1 记录每一次请求</li>
+              </ul>
+              <div class="row-actions">
+                <button class="btn btn-ghost" id="extCopy" data-i18n="ext.copy">复制模板</button>
+                <button class="btn btn-ghost" id="extOpenDir" data-i18n="ext.openDir">打开扩展目录</button>
+              </div>
+            </div>
+          </details>
           <p class="fineprint" id="extDir">—</p>
         </div>
 

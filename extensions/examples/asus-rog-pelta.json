@@ -1,7 +1,7 @@
 {
   "spec": 1,
   "id": "asus-rog-pelta",
-  "name": "ROG PELTA 电量（参考实现）",
+  "name": "ROG PELTA（官方参考实现，已实测）",
   "author": "HIDCircus",
   "match": {
     "vid": "0x0B05",
@@ -15,7 +15,7 @@
   },
   "read": {
     "battery": {
-      "transport": "feature",
+      "transport": "output",
       "report_id": "0xCC",
       "request": "0x12 0x07",
       "read_size": 64,
@@ -23,9 +23,17 @@
       "value": { "offset": 6, "size": 1, "min": 0, "max": 100 }
     },
     "charging": {
-      "transport": "feature",
+      "transport": "output",
       "report_id": "0xCC",
       "request": "0x12 0x08",
+      "read_size": 64,
+      "reply_check": { "offset": 1, "equals": "0x12" },
+      "value": { "offset": 5, "equals": "1" }
+    },
+    "lighting_on": {
+      "transport": "output",
+      "report_id": "0xCC",
+      "request": "0x12 0x13",
       "read_size": 64,
       "reply_check": { "offset": 1, "equals": "0x12" },
       "value": { "offset": 5, "equals": "1" }
@@ -34,15 +42,17 @@
   "write": {
     "lighting_on": {
       "label": "开灯效",
-      "transport": "feature",
+      "transport": "output",
       "report_id": "0xCC",
-      "request": "0x51 0x10 0x01"
+      "request": "0x51 0x10 0x00 0x00 0x01",
+      "read_size": 64
     },
     "lighting_off": {
       "label": "关灯效",
-      "transport": "feature",
+      "transport": "output",
       "report_id": "0xCC",
-      "request": "0x51 0x10 0x00"
+      "request": "0x51 0x10 0x00 0x00 0x00",
+      "read_size": 64
     }
   }
 }

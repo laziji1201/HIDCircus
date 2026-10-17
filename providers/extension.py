@@ -332,10 +332,16 @@ class ExtensionProvider(Provider):
             return None, "无响应"
         check = rule.get("reply_check")
         if isinstance(check, dict):
-            got = _extract(resp, dict(check, equals=check.get("equals")))
+            got = _extract(resp, check)
             if got is not True:
                 return None, "响应不匹配"
-        value = _extract(resp, rule)
+        # 取值规则在 value 里；个别扩展把 offset 直接写在规则上，也兼容一下
+        value_rule = rule.get("value")
+        if not isinstance(value_rule, dict):
+            value_rule = {k: rule[k] for k in ("offset", "size", "scale",
+                                               "round", "min", "max", "equals")
+                          if k in rule}
+        value = _extract(resp, value_rule)
         return value, ""
 
     def scan(self):
@@ -378,6 +384,8 @@ class ExtensionProvider(Provider):
                     dev.battery = int(value)
                 elif kind == "charging":
                     dev.charging = bool(value)
+                else:
+                    dev.extra[kind] = value      # 其它状态放进 extra，面板上能看到
             if problems:
                 dev.note = "未读到: " + ", ".join(problems)
         finally:
@@ -403,8 +411,15 @@ class ExtensionProvider(Provider):
             return {"ok": False, "error": "设备没插着"}
 
         template = rule.get("request") or rule.get("command")
-        data = _template(template, payload or {})
+        body = _template(template, payload or {})
         transport = rule.get("transport", "feature")
+        data = body
+        if transport != "razer":
+            # 和读取一样，report_id 要拼在报文最前面（之前漏了这步，写入会被设备忽略）
+            rid = _as_int(rule.get("report_id"))
+            need = rid is not None and (not body or body[0] != rid)
+            if need:
+                data = bytes([rid]) + body
         handle, kernel32 = self._open(entry["path"], transport)
         if handle is None:
             return {"ok": False, "error": "打不开设备"}

@@ -424,6 +424,18 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True})
             return
 
+        if route == "/api/extensions/open-dir":
+            target = next((d for d in EXTENSION_DIRS if d.is_dir()), None)
+            if target is None:
+                self._json({"ok": False, "error": "扩展目录不存在"}, 404)
+                return
+            try:
+                subprocess.Popen(["explorer.exe", str(target)])
+                self._json({"ok": True, "dir": str(target)})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 500)
+            return
+
         if route == "/api/autostart":
             try:
                 body = json.loads(raw or b"{}")

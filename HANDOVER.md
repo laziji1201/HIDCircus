@@ -281,7 +281,15 @@ buf[89]     校验
     验证时要 **用 `cmd /c start ""` 启动**：直接从脚本里 `Start-Process` 拉窗口版会立刻退出
     （沙箱里 stdio/job 句柄被占，PyInstaller 窗口版没有控制台，失败也看不到）。
     排错时可用 `pyinstaller --onedir --console --name X ... app.py` 打个控制台版看 stderr
-41. **打包实测（2026-10-17，onefile 版）**：`pyinstaller --onefile --windowed --add-data "web;web"
+41. **扩展机制已用真机验证（2026-10-17）**：把内置 `AsusProvider` 注释掉、改用
+    `extensions/asus-rog-pelta.json` 后，PELTA 的电量（51%）、充电状态、灯效状态全部读对；
+    `lighting_on/off` 写入后读回确认已翻转（False → True → False）。这证明扩展链路可用。
+    踩到的两个坑（写扩展的人一定会遇到）：
+    - **`value` 子规则**：取值要写在 `read.<项>.value` 里，直接写 `offset` 到规则上也能兼容
+    - **`report_id` 必须拼在报文最前面**，写入路径漏拼过一次，报文变成 `51 10 00..` 被设备忽略
+    - **参数位置要对**：PELTA 的 `0x51/0x10` 值是第 6 个字节（`CC 51 10 00 00 01`），
+      写成 `CC 51 10 01` 设备不认——这类偏移错只能是照着抓包对数
+42. **打包实测（2026-10-17，onefile 版）**：`pyinstaller --onefile --windowed --add-data "web;web"
     --add-data "assets;assets" --icon assets\icon.ico app.py` 产出 13.2 MB 的 exe，
     实测能正常起服务、返回页面、读设备（`dist\logs\app.log` 有完整日志）。
     **打包不会引入新的权限问题**：托盘失败只因启动它的进程被降权，正常双击是「中」权限。
