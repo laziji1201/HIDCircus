@@ -46,6 +46,7 @@ DEFAULT_SETTINGS = {
     "bg_blur": 0,           # 背景模糊半径 0–24 px
     "refresh_seconds": 10,  # 自动刷新间隔
     "device_order": [],     # 用户拖拽出来的设备顺序（设备 id 列表）
+    "palette": "amber",     # 配色预设 amber / silver / sakura / neon
 }
 
 # 运行状态（app.py 启动后回填，供页面显示托盘是否可用）
@@ -195,6 +196,20 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0) or 0)
         return self.rfile.read(length) if length else b""
 
+    def _serve_index(self):
+        """把主题/配色/语言注入 HTML，避免首帧闪一下再变。"""
+        try:
+            html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+        except OSError:
+            self._json({"error": "index.html missing"}, 500)
+            return
+        s = load_settings()
+        prefs = {"theme": s.get("theme", "auto"),
+                 "palette": s.get("palette", "amber"),
+                 "language": s.get("language", "zh")}
+        html = html.replace("__PREFS_JSON__", json.dumps(prefs))
+        self._send(html.encode("utf-8"), "text/html; charset=utf-8")
+
     def _serve_file(self, path: Path):
         if not path.is_file():
             self._json({"error": "not found"}, 404)
@@ -216,7 +231,7 @@ class Handler(BaseHTTPRequestHandler):
         route = urlparse(self.path).path
 
         if route in ("/", "/index.html"):
-            self._serve_file(WEB_DIR / "index.html")
+            self._serve_index()
             return
         if route == "/api/devices":
             self._json({"devices": collect_devices()})

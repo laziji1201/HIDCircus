@@ -19,7 +19,7 @@
 | 项 | 状态 |
 |---|---|
 | 三家电量读取 | ✅ ROG 54%、罗技 100%、雷蛇 43% |
-| ROG 耳机控制 | ✅ 灯效读写闭环（50→80→读回80→恢复50） |
+| ROG 耳机控制 | ✅ 灯效：开关 / 模式 / 亮度 / 颜色 全部实测闭环（见 §5.1） |
 | 雷蛇控制 | ✅ DPI / 轮询率读写闭环 |
 | 界面 | ✅ 重写完成：侧栏 + 卡片 + 设置页，亮暗/中英/背景图 |
 | 本地 HTTP 面板 | ✅ 串行扫描 + 2 秒缓存，端口占用自动顺延 |
@@ -203,13 +203,21 @@ buf[89]     校验
 19. 浏览器 UA 的 `[hidden]` 会输给带 `display` 的类选择器，`app.css` 顶部统一加了
     `[hidden] { display: none !important }`
 20. `-webkit-font-smoothing: antialiased` 在白底上会让文字明显变细发虚，只对深色主题启用
-21. **`.bat` 必须是 CRLF + ASCII**：写成 LF 或 UTF-8 后 cmd 会把 `if not exist (` 解析崩掉，
+21. **ROG 灯效开关是反的**：`0x12/0x13` 的 `resp[5]` **等于 1 表示灯亮**，等于 0 表示关。
+    当初按 0=开 处理，结果 UI 永远以为灯关着 → 控件全被禁用（表现为"模式选不了、颜色改不了、
+    没有关闭按钮"）。写入方向 `0x51/0x10 [1]=开 / [0]=关` 是对的，错的只是读回判断
+22. **颜色过渡会让首帧卡在过渡起点**：给 `html/body/.card` 加 `transition: color` 后，
+    主题切换时无头截图（以及慢设备首屏）会停在旧颜色上，看起来像"文字发白"。
+    现在颜色过渡只加在交互元素上，主题/配色切换直接生效
+23. **偏好要在首帧之前落到 `<html>` 上**：`/` 返回的 HTML 里由服务端注入
+    `window.__PREFS__`，头部内联脚本按它设置 `data-theme/palette/lang`，否则浅色启动会闪一下
+24. **`bat` 必须是 CRLF + ASCII**：写成 LF 或 UTF-8 后 cmd 会把 `if not exist (` 解析崩掉，
     报 `'exist' 不是内部或外部命令`，程序根本起不来（这就是"托盘没出现"的真实原因）。
     仓库里有 `.gitattributes` 固化 `*.bat eol=crlf`
-22. `SetupDiGetDeviceRegistryProperty` 要传 `SP_DEVINFO_DATA`，不能传设备接口的句柄，
+25. `SetupDiGetDeviceRegistryProperty` 要传 `SP_DEVINFO_DATA`，不能传设备接口的句柄，
     否则名字永远是空字符串
-23. `ctypes.wintypes` 没有 `UCHAR`，用 `ctypes.c_ubyte`
-24. 前端自己踩的：同一作用域里重复 `const $ = ...` 会让**整个脚本不执行**（页面白屏）。
+26. `ctypes.wintypes` 没有 `UCHAR`，用 `ctypes.c_ubyte`
+27. 前端自己踩的：同一作用域里重复 `const $ = ...` 会让**整个脚本不执行**（页面白屏）。
     现在 `app.js` 顶部挂了全局 error / unhandledrejection，出错会在页面底部显示错误条
 
 ## 7. 待验证

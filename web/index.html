@@ -6,8 +6,22 @@
 <meta name="color-scheme" content="dark light">
 <title>HIDCircus</title>
 <link rel="stylesheet" href="/web/app.css">
+<script>
+  /* 服务端注入的偏好，必须在首帧之前落到 <html> 上，否则会闪一下 */
+  window.__PREFS__ = __PREFS_JSON__;
+  (function () {
+    var p = window.__PREFS__ || {};
+    var root = document.documentElement;
+    var auto = p.theme === "auto" || !p.theme;
+    var dark = p.theme === "dark" ||
+      (auto && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    root.dataset.theme = dark ? "dark" : "light";
+    root.dataset.palette = p.palette || "amber";
+    root.lang = p.language === "en" ? "en" : "zh-CN";
+  })();
+</script>
 </head>
-<body>
+<body class="is-booting">
 <svg class="sprite" aria-hidden="true">
   <symbol id="i-devices" viewBox="0 0 24 24">
     <rect x="2.5" y="4" width="13" height="9" rx="1.6"/>
@@ -59,6 +73,14 @@
     <path d="M18 24h28"/>
   </symbol>
 </svg>
+
+<div class="loader" id="loader">
+  <div class="loader-inner">
+    <div class="loader-mark">H</div>
+    <div class="loader-text" id="loaderText">正在读取设备…</div>
+    <div class="loader-bar"><i></i></div>
+  </div>
+</div>
 
 <div class="shell">
   <aside class="rail" id="rail">
@@ -140,6 +162,14 @@
               <button data-value="dark" data-i18n="theme.dark">深色</button>
               <button data-value="light" data-i18n="theme.light">浅色</button>
             </div>
+          </div>
+
+          <div class="field">
+            <div class="field-label">
+              <span data-i18n="settings.palette">配色</span>
+              <em data-i18n="settings.palette.sub">换一套主色，界面结构不变</em>
+            </div>
+            <div class="palettes" id="paletteSeg"></div>
           </div>
 
           <div class="field">

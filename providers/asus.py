@@ -85,9 +85,10 @@ class AsusProvider(Provider):
                     dev.note = "电量读取无响应"
                 if (r := self._read(h, dev.id, 0x12, 0x08)):
                     dev.charging = r[5] == 1
-                # 灯效
+                # 灯效开关：0x12/0x13 的 resp[5] == 1 表示灯效开着
+                # （真机验证：写 0x51/0x10 的 1 之后读回就是 1，写 0 读回 0）
                 if (r := self._read(h, dev.id, 0x12, 0x13)):
-                    dev.extra["lighting_on"] = r[5] == 0
+                    dev.extra["lighting_on"] = r[5] == 1
                 if (r := self._read(h, dev.id, 0x12, 0x03)):
                     dev.extra["lighting"] = {
                         "mode": r[5], "brightness": r[6],

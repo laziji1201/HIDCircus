@@ -5,6 +5,13 @@
   const VENDOR_HUE = { asus: "#ff5a5a", logitech: "#5ab8ff", razer: "#7ce38b" };
   const MODES = [1, 2, 3, 4];
 
+  const PALETTES = [
+    { id: "amber", key: "palette.amber", colors: ["#f2a33c", "#ffc46b"] },
+    { id: "silver", key: "palette.silver", colors: ["#c9c9d3", "#ff5d13"] },
+    { id: "sakura", key: "palette.sakura", colors: ["#fbb1c5", "#f1f0ed"] },
+    { id: "neon", key: "palette.neon", colors: ["#52ffe9", "#ff3566"] },
+  ];
+
   const state = {
     settings: null,
     devices: null,
@@ -112,6 +119,7 @@
       }
     } finally {
       state.busy = false;
+      if (state.firstLoad) hideLoader();   // 第一次不管成没成都把加载页收掉
       state.firstLoad = false;
     }
   }
@@ -158,6 +166,11 @@
     if (state.devices) renderDevices();
   }
 
+  function applyPalette() {
+    const id = (state.settings && state.settings.palette) || "amber";
+    document.documentElement.dataset.palette = PALETTES.some((p) => p.id === id) ? id : "amber";
+  }
+
   function applyBackground() {
     const s = state.settings || {};
     const has = !!s.background;
@@ -195,6 +208,14 @@
       history.replaceState(null, "", "#" + state.page);
     }
     renderPageHead();
+  }
+
+  function hideLoader() {
+    const el = $("#loader");
+    document.body.classList.remove("is-booting");
+    if (!el) return;
+    el.classList.add("is-hidden");
+    setTimeout(() => el.remove(), 620);
   }
 
   function setSync(kind) {
@@ -252,29 +273,33 @@
     const mode = Number(light.mode) || 2;
     const bright = Number(light.brightness) || 0;
     const color = rgbToHex(light.color);
+    // 控件永远可改：灯效关着也能预设模式和颜色，按"应用"会顺手点亮
     return `
       <div class="ctl">
-        <div class="ctl-title">${esc(t("ctl.lighting"))}</div>
-        <div class="ctl-row">
-          <span class="ctl-label">${esc(t("ctl.mode"))}</span>
-          <span class="selwrap">
-            <select class="sel" data-f="mode" ${on ? "" : "disabled"}>
-              ${MODES.map((m) => `<option value="${m}" ${m === mode ? "selected" : ""}>${esc(t("mode." + m))}</option>`).join("")}
-            </select>
-          </span>
-          <button class="btn btn-ghost" data-act="lighting-toggle" data-on="${on ? "1" : "0"}">
-            ${esc(on ? t("action.off") : t("action.on"))}
+        <div class="ctl-head">
+          <span class="ctl-title">${esc(t("ctl.lighting"))}</span>
+          <button class="switch ${on ? "is-on" : ""}" data-act="lighting-toggle"
+                  data-on="${on ? "1" : "0"}" aria-pressed="${on}">
+            <i></i><span>${esc(on ? t("action.on") : t("action.off"))}</span>
           </button>
         </div>
         <div class="ctl-row">
+          <span class="ctl-label">${esc(t("ctl.mode"))}</span>
+          <span class="selwrap">
+            <select class="sel" data-f="mode">
+              ${MODES.map((m) => `<option value="${m}" ${m === mode ? "selected" : ""}>${esc(t("mode." + m))}</option>`).join("")}
+            </select>
+          </span>
+        </div>
+        <div class="ctl-row">
           <span class="ctl-label">${esc(t("ctl.brightness"))}</span>
-          <input type="range" min="0" max="100" step="1" value="${bright}" data-f="brightness" ${on ? "" : "disabled"}>
+          <input type="range" min="0" max="100" step="1" value="${bright}" data-f="brightness">
           <span class="ctl-val">${bright}</span>
         </div>
         <div class="ctl-row">
           <span class="ctl-label">${esc(t("ctl.color"))}</span>
-          <input type="color" value="${color}" data-f="color" ${on ? "" : "disabled"}>
-          <button class="btn btn-primary" data-act="lighting" ${on ? "" : "disabled"}>${esc(t("action.apply"))}</button>
+          <input type="color" value="${color}" data-f="color">
+          <button class="btn btn-primary" data-act="lighting">${esc(t("action.apply"))}</button>
         </div>
       </div>`;
   }
@@ -307,6 +332,24 @@
       </div>`;
   }
 
+  function ringHTML(value) {
+    const pct = value == null ? 0 : Math.max(0, Math.min(100, value));
+    const hue = value == null ? "var(--text-3)"
+      : value <= 20 ? "var(--bad)" : value <= 50 ? "var(--warn)" : "var(--ok)";
+    const r = 19;
+    const circ = 2 * Math.PI * r;
+    const dash = (circ * pct) / 100;
+    return `
+      <div class="ring" style="--ring-hue:${hue}">
+        <svg viewBox="0 0 44 44" aria-hidden="true">
+          <circle class="ring-track" cx="22" cy="22" r="${r}"/>
+          <circle class="ring-fill" cx="22" cy="22" r="${r}"
+                  stroke-dasharray="${dash.toFixed(1)} ${circ.toFixed(1)}"/>
+        </svg>
+        <span class="ring-num">${value == null ? "—" : value}<em>%</em></span>
+      </div>`;
+  }
+
   function deviceIcon(kind) {
     if (kind === "headset") return "i-headset";
     if (kind === "keyboard") return "i-keyboard";
@@ -330,6 +373,11 @@
     const body = controls ||
       `<div class="ctl-empty">${esc(t("ctl.none"))}</div>`;
 
+    // 环形进度只占一小块，腾出来的垂直空间给下面的设置项
+    const facts = [];
+    if (extra.dpi) facts.push(`DPI ${Number(extra.dpi.x) || "—"} × ${Number(extra.dpi.y) || "—"}`);
+    if (extra.poll_rate) facts.push(`${extra.poll_rate} Hz`);
+
     return `
       <article class="card ${batteryClass(value)}" data-id="${esc(d.id)}" data-vendor="${esc(d.vendor_key || "")}">
         <div class="card-head">
@@ -338,11 +386,14 @@
           <span class="card-kind">${esc(kind)}</span>
           <span class="pill ${status.kind}">${esc(status.text)}</span>
         </div>
-        <div class="battery">
-          <span class="pct">${pct}</span><span class="unit">%</span>
+        <div class="battery-row">
+          ${ringHTML(value)}
+          <div class="battery-meta">
+            ${d.charging === true ? `<span class="state is-warn">${esc(t("card.charging"))}</span>` : ""}
+            ${facts.length ? `<span class="facts">${esc(facts.join(" · "))}</span>` : ""}
+            ${d.note && d.battery == null ? `<span class="facts" style="color:var(--bad)">${esc(d.note)}</span>` : ""}
+          </div>
         </div>
-        <div class="track"><i style="width:${width}%;background:${batteryHue(value)}"></i></div>
-        ${d.note && d.battery == null ? `<div class="note"><svg class="ico"><use href="#i-alert"/></svg><span>${esc(d.note)}</span></div>` : ""}
         ${body}
       </article>`;
   }
@@ -396,6 +447,7 @@
     mark("#themeSeg", s.theme || "auto");
     mark("#langSeg", s.language || "zh");
     mark("#refreshSeg", String(s.refresh_seconds ?? 10));
+    renderPalettes(s.palette || "amber");
 
     const dim = Math.round((s.bg_dim ?? 0.55) * 100);
     const blur = Math.round(s.bg_blur ?? 0);
@@ -418,6 +470,28 @@
       const logEl = $("#aboutLog");
       if (logEl && st && st.log) logEl.textContent = st.log.replace(/^.*[\\/]/, "logs/");
     }).catch(() => {});
+  }
+
+  function renderPalettes(active) {
+    const box = $("#paletteSeg");
+    if (!box) return;
+    if (box.dataset.built !== "1") {
+      box.innerHTML = PALETTES.map((p) => `
+        <button class="palette-item" data-value="${p.id}">
+          <span class="swatch" style="background:linear-gradient(140deg, ${p.colors[0]}, ${p.colors[1]})"></span>
+          <span>${esc(t(p.key))}</span>
+        </button>`).join("");
+      box.dataset.built = "1";
+      box.addEventListener("click", async (e) => {
+        const btn = e.target.closest("button[data-value]");
+        if (!btn) return;
+        await saveSettings({ palette: btn.dataset.value });
+        applyPalette();
+        renderSettingsState();
+      });
+    }
+    Array.from(box.querySelectorAll("button[data-value]")).forEach((b) =>
+      b.classList.toggle("is-active", b.dataset.value === active));
   }
 
   /* ---------------- 提示 ---------------- */
@@ -662,6 +736,11 @@
 
       if (btn.dataset.act === "lighting") {
         const color = hexToRgb(get("color").value);
+        const toggle = card.querySelector('[data-act="lighting-toggle"]');
+        // 灯效关着的时候改模式/颜色，顺手点亮，否则用户看不到效果
+        if (toggle && toggle.dataset.on !== "1") {
+          await control(vendor, id, "lighting_on", {});
+        }
         await control(vendor, id, "lighting", {
           mode: Number(get("mode").value),
           brightness: Number(get("brightness").value),
@@ -708,9 +787,11 @@
     try {
       await loadSettings();
     } catch (err) {
-      state.settings = { theme: "auto", language: "zh", background: "", bg_dim: 0.55, bg_blur: 0, refresh_seconds: 10 };
+      state.settings = { theme: "auto", language: "zh", background: "", bg_dim: 0.72,
+                         bg_blur: 0, refresh_seconds: 10, palette: "amber", device_order: [] };
     }
     applyTheme();
+    applyPalette();
     applyLang();
     applyBackground();
     renderSettingsState();
