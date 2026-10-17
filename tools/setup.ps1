@@ -52,15 +52,16 @@ try {
 } catch {
     Write-Host "[!] 注册开机自启失败：$($_.Exception.Message)"
     Write-Host '    常见原因：计划任务被组策略禁用，或当前会话权限被降级。'
-    Write-Host '    可以手动把快捷方式放进 shell:startup 文件夹代替。'
+    Write-Host '    解决办法：右键 setup.bat →「以管理员身份运行」再试一次。'
+    Write-Host '    （HIDCircus 本身不需要管理员权限，只是当前会话被降权了）'
     exit 2
 }
 
 try {
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut($shortcut)
-    $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\schtasks.exe'
-    $lnk.Arguments = '/run /tn "' + $taskName + '"'
+    $lnk.TargetPath = $launchExe
+    $lnk.Arguments = $launchArgs.Replace('--silent', '--panel')
     $lnk.WorkingDirectory = $workDir
     $lnk.Description = 'HIDCircus 外设控制台'
     $icon = Join-Path $root 'assets\icon.ico'
