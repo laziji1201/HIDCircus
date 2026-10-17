@@ -47,6 +47,7 @@ _icon = None
 _stop = threading.Event()
 _ui_queue = queue.Queue()
 _no_window_tracking = False
+_low_integrity = False          # 低权限下无边框窗口必然失败，直接跳过
 
 
 # ---------------------------------------------------------------- 环境
@@ -92,6 +93,53 @@ def current_integrity():
     finally:
         if token:
             kernel32.CloseHandle(token)
+
+
+def parent_process():
+    """谁启动了我们（排查"低权限"是从哪个入口继承来的）。"""
+    try:
+        import subprocess as sp
+        out = sp.run(["powershell", "-NoProfile", "-Command",
+                      f"(Get-CimInstance Win32_Process -Filter 'ProcessId={os.getppid()}')"
+                      ".Name + '|' + "
+                      f"(Get-CimInstance Win32_Process -Filter 'ProcessId={os.getppid()}')"
+                      ".CommandLine"],
+                     capture_output=True, text=True, timeout=8)
+        text = out.stdout.strip()
+        return text[:160] if text else "未知"
+    except Exception:
+        return "未知"
+
+
+def warn_low_integrity():
+    """低权限时用系统弹窗说清楚，并给一条提权重启的路。
+
+    低完整性进程不能和任务栏通信（托盘必然失败），拉起的浏览器也跑不起来。
+    这不是代码能绕开的，只能靠换一个正常权限的入口启动。
+    """
+    user32.MessageBoxW.restype = ctypes.c_int
+    user32.MessageBoxW.argtypes = [w.HWND, w.LPCWSTR, w.LPCWSTR, w.UINT]
+    text = (
+        "HIDCircus 当前以「低权限」运行，托盘图标和面板窗口都无法工作。\n\n"
+        "这通常是因为它是从受限入口启动的（例如某个工具的沙箱文件管理器、"
+        "被降权的终端）。请改用下面任一方式启动：\n"
+        "  · Win+R，输入：\n     " + str(ROOT / "run.bat") + "\n"
+        "  · 或者在自己的资源管理器里进入该文件夹，双击 run.bat\n\n"
+        "点「确定」立即用管理员权限重启一次（会弹 UAC）。点「取消」继续以低权限运行。"
+    )
+    result = user32.MessageBoxW(None, text, "HIDCircus 权限不足",
+                                0x04 | 0x30 | 0x40000)   # YESNO | WARNING | TOPMOST
+    if result == 6:                                     # IDYES
+        try:
+            shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+            shell32.ShellExecuteW.restype = ctypes.c_void_p
+            shell32.ShellExecuteW.argtypes = [w.HWND, w.LPCWSTR, w.LPCWSTR,
+                                              w.LPCWSTR, w.LPCWSTR, ctypes.c_int]
+            shell32.ShellExecuteW(None, "runas", sys.executable,
+                                  f'"{ROOT / "app.py"}"', str(ROOT), 1)
+            os._exit(0)
+        except Exception:
+            log("提权重启失败: " + traceback.format_exc())
 
 
 # ---------------------------------------------------------------- 日志
@@ -347,7 +395,7 @@ def open_panel(port):
     name, browser = find_browser()
     log(f"可用浏览器: {name or '无'}")
 
-    if browser:
+    if browser and not _low_integrity:
         profile = ROOT / ".runtime" / "browser-profile"
         for label, kwargs in (("现有配置", {"wipe": False}),
                               ("清空配置副本", {"wipe": True}),
@@ -505,9 +553,12 @@ def main():
     log(f"Python: {sys.executable}")
     level = current_integrity()
     log(f"进程完整性: {INTEGRITY_LEVELS.get(level, hex(level) if level else '未知')}")
+    log(f"父进程: {parent_process()}")
+    global _low_integrity
     if level is not None and level < 0x2000:
-        log("警告：进程权限被降级，托盘图标和面板窗口很可能不可用；"
-            "请直接双击 run.bat（不要通过自动化工具/沙箱启动）")
+        _low_integrity = True
+        log("警告：进程权限被降级，托盘与无边框窗口都不可能工作（已弹窗提示）")
+        threading.Thread(target=warn_low_integrity, daemon=True).start()
 
     # 托盘
     tray_ok = False
